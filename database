@@ -1,10 +1,4 @@
 
-DROP DATABASE IF EXISTS dsq2shop;
-CREATE DATABASE dsq2shop CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE dsq2shop;
-
-SET NAMES utf8mb4;
-SET FOREIGN_KEY_CHECKS = 0;
 
 CREATE TABLE vai_tro (
   vai_tro_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -12,7 +6,7 @@ CREATE TABLE vai_tro (
   mo_ta VARCHAR(255),
   hien_thi TINYINT(1) DEFAULT 1,
   ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
+)
 
 CREATE TABLE nguoi_dung (
   nguoi_dung_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -23,10 +17,8 @@ CREATE TABLE nguoi_dung (
   sdt VARCHAR(20),
   dia_chi TEXT,
   ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-  trang_thai TINYINT(1) DEFAULT 1,
-  CONSTRAINT fk_user_role FOREIGN KEY (vai_tro_id)
-    REFERENCES vai_tro(vai_tro_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+  trang_thai TINYINT(1) DEFAULT 1
+) 
 
 CREATE TABLE danh_muc (
   danh_muc_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -35,10 +27,8 @@ CREATE TABLE danh_muc (
   slug VARCHAR(150),
   mo_ta VARCHAR(500),
   hien_thi TINYINT(1) DEFAULT 1,
-  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_danhmuc_parent FOREIGN KEY (parent_id)
-    REFERENCES danh_muc(danh_muc_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP
+) 
 
 CREATE TABLE san_pham (
   san_pham_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -48,10 +38,8 @@ CREATE TABLE san_pham (
   mo_ta TEXT,
   gia DECIMAL(18,2) DEFAULT 0,
   hien_thi TINYINT(1) DEFAULT 1,
-  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_sanpham_danhmuc FOREIGN KEY (danh_muc_id)
-    REFERENCES danh_muc(danh_muc_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP
+) 
 
 CREATE TABLE anh_san_pham (
   anh_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -59,10 +47,8 @@ CREATE TABLE anh_san_pham (
   url VARCHAR(500),
   alt_text VARCHAR(255),
   thu_tu INT DEFAULT 0,
-  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_anh_sanpham FOREIGN KEY (san_pham_id)
-    REFERENCES san_pham(san_pham_id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP
+) 
 
 CREATE TABLE menu (
   menu_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -73,15 +59,9 @@ CREATE TABLE menu (
   san_pham_id BIGINT UNSIGNED NULL,
   url VARCHAR(500),
   vi_tri INT DEFAULT 0,
-  hien_thi TINYINT(1) DEFAULT 1,
-  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_menu_parent FOREIGN KEY (parent_id)
-    REFERENCES menu(menu_id) ON DELETE CASCADE,
-  CONSTRAINT fk_menu_danhmuc FOREIGN KEY (danh_muc_id)
-    REFERENCES danh_muc(danh_muc_id) ON DELETE SET NULL,
-  CONSTRAINT fk_menu_sanpham FOREIGN KEY (san_pham_id)
-    REFERENCES san_pham(san_pham_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+  hien_thi TINYINT(1) DEFAULT 1
+
+) 
 
 
 CREATE TABLE gio_hang (
@@ -89,22 +69,15 @@ CREATE TABLE gio_hang (
   user_id BIGINT UNSIGNED,
   ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
   cap_nhat_luc DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  CONSTRAINT fk_giohang_user FOREIGN KEY (user_id)
-    REFERENCES nguoi_dung(nguoi_dung_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+)
 
 CREATE TABLE san_pham_trong_gio (
   item_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   gio_hang_id BIGINT UNSIGNED NOT NULL,
   san_pham_id BIGINT UNSIGNED NOT NULL,
   so_luong INT DEFAULT 1,
-  don_gia DECIMAL(18,2) DEFAULT 0,
-  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_spgio_gio FOREIGN KEY (gio_hang_id)
-    REFERENCES gio_hang(gio_hang_id) ON DELETE CASCADE,
-  CONSTRAINT fk_spgio_sp FOREIGN KEY (san_pham_id)
-    REFERENCES san_pham(san_pham_id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+  don_gia DECIMAL(18,2) DEFAULT 0
+) 
 
 CREATE TABLE don_hang (
   don_hang_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -115,10 +88,7 @@ CREATE TABLE don_hang (
   sdt_nhan VARCHAR(50),
   trang_thai VARCHAR(50) DEFAULT 'new',
   ngay_dat DATETIME DEFAULT CURRENT_TIMESTAMP,
-  cap_nhat_luc DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  CONSTRAINT fk_donhang_user FOREIGN KEY (user_id)
-    REFERENCES nguoi_dung(nguoi_dung_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+) 
 
 CREATE TABLE chi_tiet_don_hang (
   ct_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -126,20 +96,15 @@ CREATE TABLE chi_tiet_don_hang (
   san_pham_id BIGINT UNSIGNED NOT NULL,
   so_luong INT DEFAULT 1,
   don_gia DECIMAL(18,2) DEFAULT 0,
-  thanh_tien DECIMAL(18,2) DEFAULT 0,
-  CONSTRAINT fk_ctdh_donhang FOREIGN KEY (don_hang_id)
-    REFERENCES don_hang(don_hang_id) ON DELETE CASCADE,
-  CONSTRAINT fk_ctdh_sanpham FOREIGN KEY (san_pham_id)
-    REFERENCES san_pham(san_pham_id) ON DELETE RESTRICT
-) ENGINE=InnoDB;
-
+  thanh_tien DECIMAL(18,2) DEFAULT 0
+) 
 CREATE TABLE phuong_thuc_thanh_toan (
   phuong_thuc_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   ten VARCHAR(150) NOT NULL,
   ma VARCHAR(100),
   mo_ta VARCHAR(255),
   hien_thi TINYINT(1) DEFAULT 1
-) ENGINE=InnoDB;
+)
 
 CREATE TABLE thanh_toan (
   thanh_toan_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -148,13 +113,8 @@ CREATE TABLE thanh_toan (
   so_tien DECIMAL(18,2) NOT NULL,
   trang_thai VARCHAR(50) DEFAULT 'pending',
   ma_giao_dich VARCHAR(200),
-  thong_tin_raw TEXT,
-  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_thanhtoan_donhang FOREIGN KEY (don_hang_id)
-    REFERENCES don_hang(don_hang_id) ON DELETE CASCADE,
-  CONSTRAINT fk_thanhtoan_pt FOREIGN KEY (phuong_thuc_id)
-    REFERENCES phuong_thuc_thanh_toan(phuong_thuc_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+  thong_tin_raw TEXT
+) 
 
 CREATE TABLE ma_giam_gia (
   ma_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -165,19 +125,15 @@ CREATE TABLE ma_giam_gia (
   so_luong INT DEFAULT 0,
   het_han DATETIME,
   hien_thi TINYINT(1) DEFAULT 1
-) ENGINE=InnoDB;
+) 
 
 CREATE TABLE don_hang_ma_giam (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   don_hang_id BIGINT UNSIGNED NOT NULL,
   ma_id BIGINT UNSIGNED NOT NULL,
   tien_giam DECIMAL(18,2) DEFAULT 0,
-  ngay_sd DATETIME DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_dhmg_donhang FOREIGN KEY (don_hang_id)
-    REFERENCES don_hang(don_hang_id) ON DELETE CASCADE,
-  CONSTRAINT fk_dhmg_magiam FOREIGN KEY (ma_id)
-    REFERENCES ma_giam_gia(ma_id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+  ngay_sd DATETIME DEFAULT CURRENT_TIMESTAMP
+) 
 
 CREATE TABLE theo_doi_ma_giam (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -185,19 +141,16 @@ CREATE TABLE theo_doi_ma_giam (
   user_id BIGINT UNSIGNED NULL,
   hanh_dong VARCHAR(100),
   mo_ta VARCHAR(255),
-  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_tdmg_magiam FOREIGN KEY (ma_id)
-    REFERENCES ma_giam_gia(ma_id) ON DELETE CASCADE,
-  CONSTRAINT fk_tdmg_user FOREIGN KEY (user_id)
-    REFERENCES nguoi_dung(nguoi_dung_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP
+
+)
 
 CREATE TABLE kho_hang (
   kho_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   ten VARCHAR(200) NOT NULL,
   dia_chi VARCHAR(500),
   ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
+)
 
 CREATE TABLE nha_cung_cap (
   ncc_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -206,7 +159,7 @@ CREATE TABLE nha_cung_cap (
   email VARCHAR(255),
   dia_chi VARCHAR(500),
   ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
+) 
 
 CREATE TABLE phieu_nhap (
   phieu_nhap_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -214,24 +167,16 @@ CREATE TABLE phieu_nhap (
   ncc_id BIGINT UNSIGNED,
   kho_id BIGINT UNSIGNED,
   ngay_nhap DATETIME DEFAULT CURRENT_TIMESTAMP,
-  ghi_chu VARCHAR(500),
-  CONSTRAINT fk_phieunhap_ncc FOREIGN KEY (ncc_id)
-    REFERENCES nha_cung_cap(ncc_id) ON DELETE SET NULL,
-  CONSTRAINT fk_phieunhap_kho FOREIGN KEY (kho_id)
-    REFERENCES kho_hang(kho_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+  ghi_chu VARCHAR(500)
+) 
 
 CREATE TABLE chi_tiet_phieu_nhap (
   ctpn_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   phieu_nhap_id BIGINT UNSIGNED NOT NULL,
   san_pham_id BIGINT UNSIGNED NOT NULL,
   so_luong INT NOT NULL,
-  don_gia DECIMAL(18,2),
-  CONSTRAINT fk_ctpn_phieunhap FOREIGN KEY (phieu_nhap_id)
-    REFERENCES phieu_nhap(phieu_nhap_id) ON DELETE CASCADE,
-  CONSTRAINT fk_ctpn_sanpham FOREIGN KEY (san_pham_id)
-    REFERENCES san_pham(san_pham_id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+  don_gia DECIMAL(18,2)
+)
 
 CREATE TABLE phieu_xuat (
   phieu_xuat_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -240,14 +185,8 @@ CREATE TABLE phieu_xuat (
   don_hang_id BIGINT UNSIGNED,
   nguoi_tao_id BIGINT UNSIGNED,
   ngay_xuat DATETIME DEFAULT CURRENT_TIMESTAMP,
-  ghi_chu VARCHAR(500),
-  CONSTRAINT fk_px_kho FOREIGN KEY (kho_id)
-    REFERENCES kho_hang(kho_id) ON DELETE SET NULL,
-  CONSTRAINT fk_px_donhang FOREIGN KEY (don_hang_id)
-    REFERENCES don_hang(don_hang_id) ON DELETE SET NULL,
-  CONSTRAINT fk_px_user FOREIGN KEY (nguoi_tao_id)
-    REFERENCES nguoi_dung(nguoi_dung_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+  ghi_chu VARCHAR(500)
+) 
 
 CREATE TABLE chi_tiet_phieu_xuat (
   ctpx_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -255,11 +194,7 @@ CREATE TABLE chi_tiet_phieu_xuat (
   san_pham_id BIGINT UNSIGNED NOT NULL,
   so_luong INT NOT NULL,
   don_gia DECIMAL(18,2),
-  CONSTRAINT fk_ctpx_px FOREIGN KEY (phieu_xuat_id)
-    REFERENCES phieu_xuat(phieu_xuat_id) ON DELETE CASCADE,
-  CONSTRAINT fk_ctpx_sp FOREIGN KEY (san_pham_id)
-    REFERENCES san_pham(san_pham_id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) 
 
 CREATE TABLE theo_doi_don_hang (
   log_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -267,13 +202,8 @@ CREATE TABLE theo_doi_don_hang (
   trang_thai_cu VARCHAR(100),
   trang_thai_moi VARCHAR(100),
   ghi_chu VARCHAR(500),
-  nguoi_thuc_hien BIGINT UNSIGNED NULL,
-  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_tddh_donhang FOREIGN KEY (don_hang_id)
-    REFERENCES don_hang(don_hang_id) ON DELETE CASCADE,
-  CONSTRAINT fk_tddh_user FOREIGN KEY (nguoi_thuc_hien)
-    REFERENCES nguoi_dung(nguoi_dung_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+  nguoi_thuc_hien BIGINT UNSIGNED NULL
+) 
 
 CREATE TABLE danh_gia (
   danh_gia_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -281,12 +211,7 @@ CREATE TABLE danh_gia (
   user_id BIGINT UNSIGNED,
   sao INT DEFAULT 5,
   binh_luan TEXT,
-  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_dg_sp FOREIGN KEY (san_pham_id)
-    REFERENCES san_pham(san_pham_id) ON DELETE CASCADE,
-  CONSTRAINT fk_dg_user FOREIGN KEY (user_id)
-    REFERENCES nguoi_dung(nguoi_dung_id) ON DELETE SET NULL
-) ENGINE=InnoDB;
+  ngay_tao DATETIME DEFAULT CURRENT_TIMESTAMP
+) 
 
-SET FOREIGN_KEY_CHECKS = 1;
 
