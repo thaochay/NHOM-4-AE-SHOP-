@@ -1,284 +1,292 @@
 <?php
-// orders.php - danh sách & quản lý đơn hàng của user
+// orders.php - Danh sách đơn hàng của người dùng (đã sửa lỗi cú pháp)
 session_start();
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/inc/helpers.php';
 
-// --- Auth: require login ---
-$userSess = $_SESSION['user'] ?? null;
-$userId = $userSess['id_nguoi_dung'] ?? ($userSess['id'] ?? null);
-if (empty($userId)) {
-    header('Location: login.php'); exit;
-}
-$userId = (int)$userId;
+// Basic helper
+function e($v){ return htmlspecialchars((string)($v ?? ''), ENT_QUOTES, 'UTF-8'); }
 
-// CSRF token
-if (!isset($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
-$csrf = $_SESSION['csrf'];
-
-// POST actions (cancel)
-$messages = [];
-$errors = [];
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $act = $_POST['action'] ?? '';
-    if (!hash_equals($_SESSION['csrf'] ?? '', $_POST['csrf'] ?? '')) {
-        $errors[] = 'Token không hợp lệ. Hãy tải lại trang và thử lại.';
-    } else {
-        if ($act === 'cancel') {
-            $id = (int)($_POST['order_id'] ?? 0);
-            if ($id <= 0) $errors[] = 'ID đơn không hợp lệ.';
-            else {
-                try {
-                    // check ownership & status
-                    $s = $conn->prepare("SELECT trang_thai FROM don_hang WHERE id_don_hang = :id AND id_nguoi_dung = :uid LIMIT 1");
-                    $s->execute([':id'=>$id, ':uid'=>$userId]);
-                    $row = $s->fetch(PDO::FETCH_ASSOC);
-                    if (!$row) {
-                        $errors[] = 'Đơn hàng không tồn tại.';
-                    } else {
-                        $status = (string)($row['trang_thai'] ?? '');
-                        // allow cancel only for statuses like 'pending','new','đang xử lý' etc.
-                        $allow = preg_match('/^(pending|new|moi|đang xử lý|chuẩn bị|chưa xử lý|processing|pending_payment)$/i', trim($status));
-                        if (!$allow) {
-                            $errors[] = 'Đơn hàng không thể hủy ở trạng thái hiện tại (' . esc($status) . ').';
-                        } else {
-                            $u = $conn->prepare("UPDATE don_hang SET trang_thai = :st WHERE id_don_hang = :id AND id_nguoi_dung = :uid");
-                            $u->execute([':st'=>'Đã hủy', ':id'=>$id, ':uid'=>$userId]);
-                            $messages[] = 'Đã huỷ đơn #' . $id . '.';
-                        }
-                    }
-                } catch (Throwable $e) {
-                    $errors[] = 'Lỗi khi huỷ đơn: ' . $e->getMessage();
-                }
-            }
-        }
-    }
-    // After POST, avoid re-post: redirect back (preserve query)
-    $qs = $_SERVER['QUERY_STRING'] ? ('?' . $_SERVER['QUERY_STRING']) : '';
-    header('Location: ' . $_SERVER['PHP_SELF'] . $qs);
+// ensure user logged in
+if (!isset($_SESSION['user'])) {
+    header("Location: login.php?back=" . urlencode(basename(__FILE__) . '?' . $_SERVER['QUERY_STRING']));
     exit;
 }
 
-// --- Paging & filters ---
-$q = trim($_GET['q'] ?? '');
-$page = max(1, (int)($_GET['page'] ?? 1));
-$per_page = 12;
-$offset = ($page - 1) * $per_page;
+$user = $_SESSION['user'];
+$user_id = $user['id_nguoi_dung'] ?? $user['id'] ?? $user['user_id'] ?? 0;
 
-// build where
-$where = "WHERE id_nguoi_dung = :uid";
-$params = [':uid' => $userId];
-if ($q !== '') {
-    // search ma_don or id
-    $where .= " AND (ma_don LIKE :q OR id_don_hang = :idq)";
-    $params[':q'] = "%{$q}%";
-    $params[':idq'] = (int)$q;
+// ensure CSRF token
+if (!isset($_SESSION['csrf'])) {
+    try {
+        $_SESSION['csrf'] = bin2hex(random_bytes(16));
+    } catch (Exception $e) {
+        $_SESSION['csrf'] = bin2hex(openssl_random_pseudo_bytes(16));
+    }
+}
+
+/* status badge mapping (reuse same logic as order_view) */
+function status_badge($s){
+    $s = strtolower((string)$s);
+    $map = [
+        'moi'=>'Chờ xử lý', 'new'=>'Chờ xử lý', 'processing'=>'Đang xử lý', 'dang_xu_ly'=>'Đang xử lý',
+        'shipped'=>'Đã giao', 'delivered'=>'Đã giao', 'completed'=>'Hoàn tất',
+        'cancel'=>'Đã huỷ', 'huy'=>'Đã huỷ', 'paid'=>'Đã thanh toán', 'da_thanh_toan'=>'Đã thanh toán'
+    ];
+    $label = $map[$s] ?? ucfirst($s);
+    $cls = 'secondary';
+    if (in_array($s, ['moi','new','processing','dang_xu_ly'])) $cls = 'warning';
+    if (in_array($s, ['shipped','delivered','completed','paid','da_thanh_toan'])) $cls = 'success';
+    if (in_array($s, ['cancel','huy'])) $cls = 'danger';
+    return "<span class=\"badge bg-{$cls}\">" . e($label) . "</span>";
+}
+
+/* Handle POST actions (cancel order) */
+$flash = null;
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['action'] ?? '';
+    $token = $_POST['csrf_token'] ?? '';
+    if (empty($token) || empty($_SESSION['csrf']) || !hash_equals($_SESSION['csrf'], $token)) {
+        $flash = ['type'=>'danger','text'=>'Xác thực không hợp lệ (CSRF).'];
+    } else {
+        if ($action === 'cancel' && isset($_POST['order_id'])) {
+            $oid = (int)$_POST['order_id'];
+            if ($oid > 0) {
+                // check current status
+                $s = $conn->prepare("SELECT trang_thai FROM don_hang WHERE id_don_hang = :id AND id_nguoi_dung = :uid LIMIT 1");
+                $s->execute([':id'=>$oid, ':uid'=>$user_id]);
+                $cur = $s->fetchColumn();
+                if (!$cur) {
+                    $flash = ['type'=>'danger','text'=>'Không tìm thấy đơn hàng hoặc bạn không có quyền.'];
+                } else {
+                    $cur_l = strtolower((string)$cur);
+                    if (in_array($cur_l, ['cancel','huy','completed','delivered','paid','da_thanh_toan'])) {
+                        $flash = ['type'=>'warning','text'=>'Đơn hàng không thể huỷ (đã hoàn tất/đã huỷ/đã thanh toán).'];
+                    } else {
+                        // Try to update with 'ngay_cap_nhat' if column exists; otherwise fallback to update only trang_thai
+                        try {
+                            $u = $conn->prepare("UPDATE don_hang SET trang_thai = 'cancel', ngay_cap_nhat = NOW() WHERE id_don_hang = :id AND id_nguoi_dung = :uid");
+                            $u->execute([':id'=>$oid, ':uid'=>$user_id]);
+                            $flash = ['type'=>'success','text'=>'Đã huỷ đơn hàng #' . e($oid) . '.'];
+                        } catch (PDOException $ex) {
+                            // fallback if column 'ngay_cap_nhat' không tồn tại
+                            try {
+                                $u2 = $conn->prepare("UPDATE don_hang SET trang_thai = 'cancel' WHERE id_don_hang = :id AND id_nguoi_dung = :uid");
+                                $u2->execute([':id'=>$oid, ':uid'=>$user_id]);
+                                $flash = ['type'=>'success','text'=>'Đã huỷ đơn hàng #' . e($oid) . '.'];
+                            } catch (PDOException $ex2) {
+                                // nếu vẫn lỗi, báo lỗi chi tiết cho dev (không show raw error cho user)
+                                error_log("orders.php - cancel update failed: " . $ex2->getMessage());
+                                $flash = ['type'=>'danger','text'=>'Không thể huỷ đơn lúc này. Vui lòng thử lại hoặc liên hệ hỗ trợ.'];
+                            }
+                        }
+                    }
+                }
+            } else {
+                $flash = ['type'=>'danger','text'=>'ID đơn không hợp lệ.'];
+            }
+        } else {
+            $flash = ['type'=>'danger','text'=>'Hành động không hợp lệ.'];
+        }
+    }
+    // set session flash so it persists after redirect (optional)
+    $_SESSION['flash_message'] = $flash;
+    header('Location: ' . basename(__FILE__));
+    exit;
+}
+
+// Read flash if available in session
+if (isset($_SESSION['flash_message'])) {
+    $flash = $_SESSION['flash_message'];
+    unset($_SESSION['flash_message']);
+}
+
+// Query params: page, status, q
+$page = max(1, (int)($_GET['page'] ?? 1));
+$perPage = 12;
+$offset = ($page - 1) * $perPage;
+
+$allowed_status = ['all','moi','processing','shipped','completed','cancel','paid'];
+$filter_status = strtolower(trim((string)($_GET['status'] ?? 'all')));
+if (!in_array($filter_status, $allowed_status)) $filter_status = 'all';
+
+$search_q = trim((string)($_GET['q'] ?? ''));
+
+// Build WHERE and params
+$where = " WHERE dh.id_nguoi_dung = :uid ";
+$params = [':uid' => $user_id];
+
+if ($filter_status !== 'all') {
+    $where .= " AND LOWER(COALESCE(dh.trang_thai, '')) = :status ";
+    $params[':status'] = $filter_status;
+}
+
+if ($search_q !== '') {
+    // search by order code or phone or email
+    $where .= " AND (dh.ma_don LIKE :q OR dh.so_dien_thoai LIKE :q OR dh.email LIKE :q) ";
+    $params[':q'] = '%' . str_replace('%','\\%',$search_q) . '%';
 }
 
 // count total
-$total_items = 0;
-try {
-    $countSql = "SELECT COUNT(*) FROM don_hang $where";
-    $cstmt = $conn->prepare($countSql);
-    $cstmt->execute($params);
-    $total_items = (int)$cstmt->fetchColumn();
-} catch (Throwable $e) {
-    // if table doesn't exist or other error, set total 0
-    $total_items = 0;
-}
+$countSt = $conn->prepare("SELECT COUNT(*) FROM don_hang dh " . $where);
+$countSt->execute($params);
+$totalRows = (int)$countSt->fetchColumn();
+$totalPages = (int)ceil($totalRows / $perPage);
 
-// fetch orders
-$orders = [];
-try {
-    $sql = "SELECT * FROM don_hang $where ORDER BY ngay_dat DESC LIMIT :limit OFFSET :offset";
-    $stmt = $conn->prepare($sql);
-    foreach ($params as $k=>$v) $stmt->bindValue($k, $v);
-    $stmt->bindValue(':limit', (int)$per_page, PDO::PARAM_INT);
-    $stmt->bindValue(':offset', (int)$offset, PDO::PARAM_INT);
-    $stmt->execute();
-    $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Throwable $e) {
-    $orders = [];
-    $errors[] = 'Không tải được đơn hàng: ' . $e->getMessage();
+// fetch rows
+$sql = "SELECT dh.* FROM don_hang dh " . $where . " ORDER BY dh.ngay_dat DESC LIMIT :limit OFFSET :offset";
+$stmt = $conn->prepare($sql);
+// bind params
+foreach ($params as $k=>$v) {
+    $stmt->bindValue($k, $v);
 }
+$stmt->bindValue(':limit', (int)$perPage, PDO::PARAM_INT);
+$stmt->bindValue(':offset', (int)$offset, PDO::PARAM_INT);
+$stmt->execute();
+$orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// For each order try to fetch items from possible detail tables
-function fetch_order_items($conn, $orderId) {
-    $candidates = ['chi_tiet_don_hang', 'don_hang_chi_tiet', 'order_items', 'order_detail'];
-    foreach ($candidates as $tbl) {
-        try {
-            // Try to select typical columns
-            $sql = "SELECT * FROM `$tbl` WHERE id_don_hang = :id LIMIT 100";
-            $s = $conn->prepare($sql);
-            $s->execute([':id'=>$orderId]);
-            $rows = $s->fetchAll(PDO::FETCH_ASSOC);
-            if (!empty($rows)) return [$tbl, $rows];
-        } catch (Throwable $e) {
-            // ignore and try next
-        }
-    }
-    return [null, []];
-}
+// small helper to format money
+function fm($n){ return number_format((float)$n,0,',','.').' ₫'; }
 
-// helper status label
-function status_label($s) {
-    $s = trim((string)$s);
-    $lower = mb_strtolower($s);
-    if (preg_match('/hủy|huy/i', $s)) return '<span class="badge bg-danger">Đã hủy</span>';
-    if (preg_match('/(đã giao|completed|delivered)/i', $s)) return '<span class="badge bg-success">Đã giao</span>';
-    if (preg_match('/(đang|processing|xử lý)/i', $s)) return '<span class="badge bg-warning text-dark">Đang xử lý</span>';
-    if (preg_match('/(pending|mới)/i', $s)) return '<span class="badge bg-secondary text-dark">Mới</span>';
-    return '<span class="badge bg-info text-dark">' . esc($s) . '</span>';
-}
-
-$total_pages = max(1, (int)ceil($total_items / $per_page));
 ?>
 <!doctype html>
 <html lang="vi">
 <head>
   <meta charset="utf-8">
-  <title>Đơn hàng của tôi — <?= esc(site_name($conn)) ?></title>
+  <title>Đơn hàng của tôi — <?= e(function_exists('site_name') ? site_name($conn) : 'Shop') ?></title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    .order-card { border:1px solid #eef4ff; border-radius:8px; padding:14px; background:#fff; }
-    .small-muted { color:#6c757d; font-size: .95rem; }
-    .items-list { max-height:240px; overflow:auto; }
+    body{ background:#f5f8fb; padding:20px; font-family:system-ui, -apple-system, "Segoe UI", Roboto, Arial; }
+    .page { max-width:1100px; margin:0 auto; }
+    .card-order { border-radius:12px; background:#fff; padding:14px; box-shadow:0 12px 30px rgba(11,38,80,0.04); }
+    .small-muted { color:#6c757d; font-size:13px; }
   </style>
 </head>
-<body style="background:#f6f7f8;">
-<div class="container py-4">
-
+<body>
+<div class="page">
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h4 class="mb-0">Đơn hàng của tôi</h4>
-    <a href="index.php" class="btn btn-outline-secondary btn-sm">Về trang chủ</a>
+    <div>
+      <a href="index.php" class="btn btn-link">Trang chủ</a>
+      <a href="cart.php" class="btn btn-outline-secondary">Giỏ hàng</a>
+    </div>
   </div>
 
-  <?php if (!empty($messages)): foreach($messages as $m): ?>
-    <div class="alert alert-success"><?= esc($m) ?></div>
-  <?php endforeach; endif; ?>
+  <?php if ($flash): ?>
+    <div class="alert alert-<?= e($flash['type'] ?? 'info') ?>"><?= e($flash['text'] ?? '') ?></div>
+  <?php endif; ?>
 
-  <?php if (!empty($errors)): foreach($errors as $e): ?>
-    <div class="alert alert-danger"><?= esc($e) ?></div>
-  <?php endforeach; endif; ?>
-
-  <div class="card p-3 mb-3">
-    <form method="get" class="d-flex gap-2 align-items-center">
-      <input name="q" class="form-control form-control-sm" placeholder="Tìm theo mã đơn hoặc ID" value="<?= esc($q) ?>">
-      <button class="btn btn-sm btn-primary">Tìm</button>
-      <a href="orders.php" class="btn btn-sm btn-outline-secondary">Reset</a>
-      <div class="ms-auto small-muted">Hiển thị <?= count($orders) ?> / <?= $total_items ?> đơn</div>
+  <div class="card card-order mb-3">
+    <form class="row g-2 align-items-center" method="get" action="orders.php">
+      <div class="col-auto">
+        <label class="visually-hidden">Trạng thái</label>
+        <select name="status" class="form-select">
+          <option value="all" <?= $filter_status==='all' ? 'selected':'' ?>>Tất cả trạng thái</option>
+          <option value="moi" <?= $filter_status==='moi' ? 'selected':'' ?>>Chờ xử lý</option>
+          <option value="processing" <?= $filter_status==='processing' ? 'selected':'' ?>>Đang xử lý</option>
+          <option value="shipped" <?= $filter_status==='shipped' ? 'selected':'' ?>>Đang giao</option>
+          <option value="completed" <?= $filter_status==='completed' ? 'selected':'' ?>>Hoàn tất</option>
+          <option value="paid" <?= $filter_status==='paid' ? 'selected':'' ?>>Đã thanh toán</option>
+          <option value="cancel" <?= $filter_status==='cancel' ? 'selected':'' ?>>Đã huỷ</option>
+        </select>
+      </div>
+      <div class="col">
+        <input type="text" name="q" value="<?= e($search_q) ?>" class="form-control" placeholder="Tìm theo mã đơn, email, số điện thoại...">
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-primary">Lọc</button>
+      </div>
     </form>
   </div>
 
   <?php if (empty($orders)): ?>
-    <div class="alert alert-info">Không có đơn hàng nào.</div>
+    <div class="card card-order text-center p-5">
+      <div class="mb-3"><strong>Bạn chưa có đơn hàng nào.</strong></div>
+      <a href="index.php" class="btn btn-primary">Mua sắm ngay</a>
+    </div>
   <?php else: ?>
     <div class="row g-3">
-      <?php foreach ($orders as $ord): 
-        $oid = $ord['id_don_hang'] ?? ($ord['id'] ?? null);
-        $code = $ord['ma_don'] ?? ('#' . ($oid ?? ''));
-        $date = $ord['ngay_dat'] ?? ($ord['created_at'] ?? '');
-        $status = $ord['trang_thai'] ?? ($ord['status'] ?? '');
-        $total = $ord['tong_tien'] ?? ($ord['total'] ?? 0);
-        // fetch items
-        list($tblName, $items) = fetch_order_items($conn, $oid);
+      <?php foreach($orders as $od): 
+        $oid = (int)$od['id_don_hang'];
+        $code = $od['ma_don'] ?? $oid;
+        $created = $od['ngay_dat'] ?? $od['created_at'] ?? '';
+        $total = $od['tong_tien'] ?? $od['tong'] ?? 0;
+        $status = $od['trang_thai'] ?? '';
       ?>
       <div class="col-12">
-        <div class="order-card">
-          <div class="d-flex align-items-start gap-3">
-            <div style="min-width:140px">
-              <div class="fw-semibold">Mã: <?= esc($code) ?></div>
-              <div class="small-muted"><?= esc($date) ?></div>
-            </div>
+        <div class="card card-order d-flex flex-row align-items-center gap-3">
+          <div style="min-width:120px">
+            <div class="small-muted">Mã đơn</div>
+            <div class="fw-bold">#<?= e($code) ?></div>
+            <div class="small-muted"><?= e($created) ?></div>
+          </div>
 
-            <div class="flex-grow-1">
-              <div class="d-flex justify-content-between align-items-start mb-2">
-                <div>
-                  <div class="small-muted">Trạng thái: <?= \closure(function() use ($status) { return status_label($status); })() ?></div>
-                </div>
-                <div class="text-end">
-                  <div class="fw-semibold"><?= function_exists('price') ? price($total) : number_format($total,0,',','.') . ' ₫' ?></div>
-                </div>
+          <div class="flex-grow-1">
+            <div class="d-flex justify-content-between align-items-center">
+              <div>
+                <div class="small-muted">Tổng tiền</div>
+                <div class="fw-bold"><?= fm($total) ?></div>
               </div>
-
-              <?php if (!empty($items)): ?>
-                <div class="items-list mb-2">
-                  <?php foreach($items as $it):
-                    // try to find common fields
-                    $iname = $it['ten'] ?? $it['name'] ?? $it['product_name'] ?? ($it['title'] ?? 'Sản phẩm');
-                    $iquan = $it['so_luong'] ?? $it['qty'] ?? $it['quantity'] ?? 1;
-                    $iprice = $it['gia'] ?? $it['price'] ?? $it['unit_price'] ?? 0;
-                    $iimg = $it['img'] ?? $it['image'] ?? null;
-                  ?>
-                  <div class="d-flex align-items-center gap-3 mb-2">
-                    <?php if ($iimg): ?>
-                      <img src="<?= esc($iimg) ?>" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:6px">
-                    <?php else: ?>
-                      <div style="width:56px;height:56px;background:#f3f4f6;border-radius:6px"></div>
-                    <?php endif; ?>
-                    <div class="flex-grow-1">
-                      <div class="fw-semibold small mb-1"><?= esc($iname) ?></div>
-                      <div class="small-muted">Số lượng: <?= (int)$iquan ?> &nbsp; · &nbsp; <?= function_exists('price') ? price($iprice) : number_format($iprice,0,',','.') . ' ₫' ?></div>
-                    </div>
-                    <div class="text-end small"><?= function_exists('price') ? price($iprice * $iquan) : number_format($iprice * $iquan,0,',','.') . ' ₫' ?></div>
-                  </div>
-                  <?php endforeach; ?>
-                </div>
-                <div class="small text-muted">Nguồn chi tiết: <?= esc($tblName) ?></div>
-              <?php else: ?>
-                <div class="small-muted mb-2">Không có chi tiết sản phẩm (bảng chi tiết đơn hàng chưa có hoặc tên bảng khác).</div>
-              <?php endif; ?>
-
-              <div class="d-flex gap-2 mt-3">
-                <a href="order_view.php?id=<?= urlencode($oid) ?>" class="btn btn-sm btn-outline-secondary">Xem chi tiết</a>
-
-                <?php
-                  // show cancel button if allowed
-                  $can_cancel = preg_match('/^(pending|new|moi|đang xử lý|chuẩn bị|chưa xử lý|processing|pending_payment)$/i', trim($status));
-                ?>
-                <?php if ($can_cancel): ?>
-                  <form method="post" class="d-inline" onsubmit="return confirm('Bạn có chắc muốn huỷ đơn này?');">
-                    <input type="hidden" name="csrf" value="<?= esc($csrf) ?>">
-                    <input type="hidden" name="action" value="cancel">
-                    <input type="hidden" name="order_id" value="<?= esc($oid) ?>">
-                    <button class="btn btn-sm btn-outline-danger">Huỷ đơn</button>
-                  </form>
-                <?php else: ?>
-                  <button class="btn btn-sm btn-outline-secondary" disabled>Không thể huỷ</button>
-                <?php endif; ?>
-
+              <div class="text-end">
+                <div class="small-muted">Trạng thái</div>
+                <div><?= status_badge($status) ?></div>
               </div>
             </div>
+            <div class="small-muted mt-2">Phương thức: <?= e($od['phuong_thuc_thanh_toan'] ?? $od['phuong_thuc'] ?? 'COD') ?></div>
+          </div>
+
+          <div style="min-width:200px; text-align:right">
+            <a href="order_view.php?id=<?= $oid ?>" class="btn btn-outline-secondary btn-sm mb-2">Xem chi tiết</a>
+            <!-- Reorder: small form -->
+            <form method="post" action="checkout.php" style="display:inline-block">
+              <input type="hidden" name="action" value="reorder">
+              <input type="hidden" name="order_id" value="<?= $oid ?>">
+              <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf']) ?>">
+              <button class="btn btn-outline-primary btn-sm mb-2" type="submit">Mua lại</button>
+            </form>
+
+            <!-- Cancel: only show if order can be cancelled -->
+            <?php 
+              $lower = strtolower((string)$status);
+              if (!in_array($lower, ['cancel','huy','completed','delivered','paid','da_thanh_toan'])): 
+            ?>
+              <form method="post" action="orders.php" style="display:inline-block" onsubmit="return confirm('Bạn có chắc muốn huỷ đơn #' + <?= json_encode($code) ?> + ' ?');">
+                <input type="hidden" name="action" value="cancel">
+                <input type="hidden" name="order_id" value="<?= $oid ?>">
+                <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf']) ?>">
+                <button class="btn btn-danger btn-sm mb-2" type="submit">Huỷ đơn</button>
+              </form>
+            <?php else: ?>
+              <div class="small-muted mt-2">Không thể huỷ</div>
+            <?php endif; ?>
           </div>
         </div>
       </div>
       <?php endforeach; ?>
     </div>
 
-    <!-- pagination -->
-    <nav class="mt-4">
-      <ul class="pagination">
-        <?php
-          $start = max(1, $page - 3);
-          $end = min($total_pages, $page + 3);
-          $base = $_SERVER['PHP_SELF'] . '?';
-          if ($q !== '') $base .= 'q=' . urlencode($q) . '&';
-          // prev
-          if ($page > 1) echo '<li class="page-item"><a class="page-link" href="'. $base .'page='.($page-1).'">&laquo;</a></li>';
-          else echo '<li class="page-item disabled"><span class="page-link">&laquo;</span></li>';
-          for ($i=$start;$i<=$end;$i++){
-            if ($i==$page) echo '<li class="page-item active"><span class="page-link">'.$i.'</span></li>';
-            else echo '<li class="page-item"><a class="page-link" href="'. $base .'page='.$i.'">'.$i.'</a></li>';
-          }
-          if ($page < $total_pages) echo '<li class="page-item"><a class="page-link" href="'. $base .'page='.($page+1).'">&raquo;</a></li>';
-          else echo '<li class="page-item disabled"><span class="page-link">&raquo;</span></li>';
-        ?>
-      </ul>
-    </nav>
+    <!-- Pagination -->
+    <?php if ($totalPages > 1): ?>
+      <nav class="mt-4" aria-label="Orders pagination">
+        <ul class="pagination justify-content-center">
+          <?php
+            $qs = $_GET;
+            for ($p=1;$p<=$totalPages;$p++):
+              $qs['page']=$p;
+              $link = basename(__FILE__) . '?' . http_build_query($qs);
+          ?>
+            <li class="page-item <?= $p===$page ? 'active':'' ?>"><a class="page-link" href="<?= e($link) ?>"><?= $p ?></a></li>
+          <?php endfor; ?>
+        </ul>
+      </nav>
+    <?php endif; ?>
+
   <?php endif; ?>
 
 </div>
 
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
