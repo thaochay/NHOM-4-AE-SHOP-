@@ -1,5 +1,6 @@
 <?php
 // login.php - xử lý + giao diện đăng nhập (self-contained)
+// Đã chỉnh: nếu user.is_admin = 1 -> set $_SESSION['is_admin'] = 1 và redirect sang admin/index.php
 session_start();
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/inc/helpers.php';
@@ -22,6 +23,11 @@ $back = $_REQUEST['back'] ?? ($_SERVER['HTTP_REFERER'] ?? 'index.php');
 
 // if user already logged in, redirect back
 if (!empty($_SESSION['user'])) {
+    // if admin already logged in, prefer admin dashboard when available
+    if (!empty($_SESSION['is_admin'])) {
+        header('Location: admin/index.php');
+        exit;
+    }
     header('Location: ' . $back);
     exit;
 }
@@ -39,6 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $err = 'Vui lòng nhập email và mật khẩu.';
     } else {
         try {
+            // lấy cả trường is_admin để kiểm tra
             $stmt = $conn->prepare("SELECT * FROM nguoi_dung WHERE email = :email LIMIT 1");
             $stmt->execute([':email' => $email]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -49,7 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $hash = $user['mat_khau'] ?? '';
 
                 // Preferred: password_verify with hashed password
-                if ($hash !== '' && (password_verify($pass, $hash) || password_needs_rehash($hash, PASSWORD_DEFAULT) && password_verify($pass, $hash))) {
+                if ($hash !== '' && (password_verify($pass, $hash) || (password_needs_rehash($hash, PASSWORD_DEFAULT) && password_verify($pass, $hash)))) {
                     // OK - if needs rehash, update
                     if (password_needs_rehash($hash, PASSWORD_DEFAULT)) {
                         $newHash = password_hash($pass, PASSWORD_DEFAULT);
@@ -57,26 +64,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $u->execute([':h'=>$newHash, ':id'=>$user['id_nguoi_dung']]);
                     }
 
-                    // login success
+                    // login success: set session user
                     $_SESSION['user'] = [
-                        'id_nguoi_dung' => $user['id_nguoi_dung'],
+                        'id_nguoi_dung' => (int)$user['id_nguoi_dung'],
                         'ten'           => $user['ten'] ?? '',
                         'email'         => $user['email'] ?? ''
                     ];
 
                     // update last_login
-                    $upd = $conn->prepare("UPDATE nguoi_dung SET last_login = NOW() WHERE id_nguoi_dung = :id");
-                    $upd->execute([':id'=>$user['id_nguoi_dung']]);
+                    try {
+                        $upd = $conn->prepare("UPDATE nguoi_dung SET last_login = NOW() WHERE id_nguoi_dung = :id");
+                        $upd->execute([':id'=>$user['id_nguoi_dung']]);
+                    } catch (Exception $e) { /* ignore */ }
 
                     // remember email (optional convenience only)
                     if ($remember) setcookie('remember_email', $email, time()+60*60*24*30, "/");
 
+                    // If user is admin -> mark session and redirect to admin dashboard
+                    $isAdmin = !empty($user['is_admin']) && (int)$user['is_admin'] === 1;
+                    if ($isAdmin) {
+                        $_SESSION['is_admin'] = 1;
+                        // flash and redirect to admin dashboard
+                        flash_set('success', 'Đăng nhập quản trị thành công. Chào ' . ($_SESSION['user']['ten'] ?: 'Admin') . '!');
+                        header('Location: admin/index.php');
+                        exit;
+                    }
+
+                    // Non-admin normal user
                     $success = "Đăng nhập thành công. Chào " . ($_SESSION['user']['ten'] ?: 'bạn') . "!";
                     flash_set('success', $success);
 
-                    // redirect to back (avoid open-redirect: allow only internal links)
-                    $allowedBase = parse_url($_SERVER['HTTP_HOST'], PHP_URL_HOST);
-                    // if back is relative path, ok. If absolute different host, go to index.php
+                    // redirect to back (avoid open-redirect: allow only relative or same-host paths)
                     $redirect = 'index.php';
                     if ($back && (strpos($back, '/') === 0 || parse_url($back, PHP_URL_HOST) === null)) {
                         $redirect = $back;
@@ -102,6 +120,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $upd->execute([':id'=>$user['id_nguoi_dung']]);
 
                         if ($remember) setcookie('remember_email', $email, time()+60*60*24*30, "/");
+
+                        // admin check for plain-text migration case as well
+                        $isAdmin = !empty($user['is_admin']) && (int)$user['is_admin'] === 1;
+                        if ($isAdmin) {
+                            $_SESSION['is_admin'] = 1;
+                            flash_set('success', 'Đăng nhập quản trị thành công (migrate mật khẩu). Chào ' . ($_SESSION['user']['ten'] ?: 'Admin') . '!');
+                            header('Location: admin/index.php');
+                            exit;
+                        }
 
                         $success = "Đăng nhập thành công (migrate mật khẩu). Chào " . ($_SESSION['user']['ten'] ?: 'bạn') . "!";
                         flash_set('success', $success);
