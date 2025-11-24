@@ -1,354 +1,360 @@
 <?php
-// sanpham.php - danh sách sản phẩm với header/menu + AJAX add-to-cart (fallback form)
+// sanpham_chitiet.php - trang chi tiết sản phẩm (giao diện cải tiến)
 session_start();
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/inc/helpers.php';
 
-// cart count for header badge
-$cart = $_SESSION['cart'] ?? [];
-$cart_count = 0;
-foreach ($cart as $it) $cart_count += isset($it['qty']) ? (int)$it['qty'] : (isset($it['sl']) ? (int)$it['sl'] : 1);
-
-// params
-$q = trim($_GET['q'] ?? '');
-$cat = (int)($_GET['cat'] ?? 0);
-$page = max(1, (int)($_GET['page'] ?? 1));
-$per_page = 12;
-$offset = ($page -1) * $per_page;
-
-// build where
-$where = "WHERE 1=1"; $params = [];
-if ($q !== '') { $where .= " AND (sp.ten LIKE :q OR sp.mo_ta LIKE :q)"; $params[':q'] = '%'.$q.'%'; }
-if ($cat > 0) { $where .= " AND sp.id_danh_muc = :cat"; $params[':cat'] = $cat; }
-
-// count
-$countSql = "SELECT COUNT(*) FROM san_pham sp $where";
-$countStmt = $conn->prepare($countSql);
-$countStmt->execute($params);
-$total_items = (int)$countStmt->fetchColumn();
-$total_pages = max(1, (int)ceil($total_items / $per_page));
-
-// fetch products
-$sql = "
-  SELECT sp.id_san_pham, sp.ten, sp.gia,
-    (SELECT duong_dan FROM anh_san_pham WHERE id_san_pham = sp.id_san_pham AND la_anh_chinh = 1 LIMIT 1) AS img,
-    dm.ten AS danh_muc_ten
-  FROM san_pham sp
-  LEFT JOIN danh_muc dm ON sp.id_danh_muc = dm.id_danh_muc
-  $where
-  ORDER BY sp.id_san_pham DESC
-  LIMIT :limit OFFSET :offset
-";
-$stmt = $conn->prepare($sql);
-foreach ($params as $k=>$v) $stmt->bindValue($k,$v);
-$stmt->bindValue(':limit', (int)$per_page, PDO::PARAM_INT);
-$stmt->bindValue(':offset', (int)$offset, PDO::PARAM_INT);
-$stmt->execute();
-$products = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// categories
-$cats = [];
-try { $cstmt = $conn->query("SELECT id_danh_muc, ten, slug FROM danh_muc ORDER BY ten ASC"); $cats = $cstmt->fetchAll(PDO::FETCH_ASSOC); } catch (Exception $e) {}
-
-function buildUrl($overrides = []) {
-  $qs = array_merge($_GET, $overrides);
-  return basename($_SERVER['PHP_SELF']) . '?' . http_build_query($qs);
+/* fallback helpers nếu inc/helpers.php thiếu */
+if (!function_exists('esc')) {
+    function esc($v){ return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 }
+if (!function_exists('price')) {
+    function price($v){ return number_format((float)$v,0,',','.') . ' ₫'; }
+}
+
+/**
+ * getProductImagesFromDB: trả về mảng các đường dẫn ảnh (ưu tiên la_anh_chinh)
+ */
+function getProductImagesFromDB($conn, $product_id, $placeholder = 'images/placeholder.jpg') {
+    $out = [];
+    try {
+        $stmt = $conn->prepare("SELECT duong_dan, la_anh_chinh FROM anh_san_pham WHERE id_san_pham = :id ORDER BY la_anh_chinh DESC, thu_tu ASC, id_anh ASC");
+        $stmt->execute(['id'=>$product_id]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $rows = [];
+    }
+    if (empty($rows)) {
+        return [$placeholder];
+    }
+    foreach ($rows as $r) {
+        $p = trim($r['duong_dan']);
+        if ($p === '') continue;
+        if (preg_match('#^https?://#i', $p)) {
+            $out[] = $p; continue;
+        }
+        $candidates = [
+            ltrim($p, '/'),
+            'images/' . ltrim($p, '/'),
+            'uploads/' . ltrim($p, '/'),
+            'public/' . ltrim($p, '/'),
+            'images/products/' . basename($p),
+            'images/' . basename($p),
+            '../' . ltrim($p, '/')
+        ];
+        $found = null;
+        foreach (array_values(array_unique($candidates)) as $c) {
+            if (file_exists(__DIR__ . '/' . $c) && filesize(__DIR__ . '/' . $c) > 0) {
+                $found = $c; break;
+            }
+        }
+        if ($found) $out[] = $found;
+        else $out[] = ltrim($p, '/');
+    }
+    $out = array_values(array_unique($out));
+    if (empty($out)) return [$placeholder];
+    return $out;
+}
+
+/* ----- get id param and validate ----- */
+$id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+if ($id <= 0) {
+    http_response_code(400);
+    echo "<!doctype html><html><head><meta charset='utf-8'><title>Thiếu ID</title></head><body><h2>ID sản phẩm không hợp lệ</h2><p><a href='sanpham.php'>Về danh sách sản phẩm</a></p></body></html>";
+    exit;
+}
+
+/* fetch product */
+$sql = "SELECT sp.*, dm.ten AS danh_muc_ten
+        FROM san_pham sp
+        LEFT JOIN danh_muc dm ON sp.id_danh_muc = dm.id_danh_muc
+        WHERE sp.id_san_pham = :id
+        LIMIT 1";
+$stmt = $conn->prepare($sql);
+$stmt->execute(['id'=>$id]);
+$product = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$product) {
+    http_response_code(404);
+    echo "<!doctype html><html><head><meta charset='utf-8'><title>Không tìm thấy</title></head><body><h2>Không tìm thấy sản phẩm</h2><p><a href='sanpham.php'>Quay về</a></p></body></html>";
+    exit;
+}
+
+/* images */
+$images = getProductImagesFromDB($conn, $id);
+$mainImage = $images[0] ?? 'images/placeholder.jpg';
+
+/* cart count for header (simple) */
+$cart = $_SESSION['cart'] ?? [];
+$cart_count = 0; foreach ($cart as $it) $cart_count += isset($it['qty']) ? (int)$it['qty'] : (isset($it['sl']) ? (int)$it['sl'] : 1);
+
+/* related products (small, by same category) */
+$related = [];
+try {
+    if (!empty($product['id_danh_muc'])) {
+        $rstmt = $conn->prepare("SELECT id_san_pham, ten, gia FROM san_pham WHERE id_danh_muc = :cat AND id_san_pham != :id AND trang_thai = 1 ORDER BY id_san_pham DESC LIMIT 4");
+        $rstmt->execute(['cat'=>$product['id_danh_muc'], 'id'=>$id]);
+        $related = $rstmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) { $related = []; }
+
 ?>
 <!doctype html>
 <html lang="vi">
 <head>
   <meta charset="utf-8">
-  <title>Sản phẩm — <?= esc(site_name($conn)) ?></title>
+  <title><?= esc($product['ten']) ?> — <?= esc(site_name($conn)) ?></title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
   <style>
-    /* header */
-    .site-top { border-bottom:1px solid #eef3f8; background:#fff; position:sticky; top:0; z-index:1030; }
-    .brand { display:flex; align-items:center; gap:10px; text-decoration:none; color:inherit; }
-    .brand-mark { width:48px;height:48px;border-radius:8px;background:#0b1220;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800; }
-    .nav-center { display:flex; gap:8px; align-items:center; justify-content:center; flex:1; }
-    .nav-center .nav-link { color:#333; padding:8px 12px; border-radius:8px; font-weight:600; text-decoration:none; }
-    .nav-center .nav-link.active, .nav-center .nav-link:hover { color:#0d6efd; background:rgba(13,110,253,0.04); }
-    .search-input { width:360px; max-width:35vw; }
-    .icon-circle { width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:#f6f8fb;color:#0b1220; }
-    .cart-badge { font-size:.72rem; position:relative; top:-10px; left:-6px; }
-    @media (max-width:991px) { .nav-center{ display:none; } .search-input{ display:none; } }
-    /* products */
-    .card-product { border:1px solid #eef2f7; border-radius:12px; transition:.15s; }
-    .card-product:hover { box-shadow:0 8px 24px rgba(0,0,0,0.06); transform:translateY(-4px); }
-    .prod-img { width:100%; height:200px; object-fit:cover; border-radius:12px 12px 0 0; }
-    .price { color:#0d6efd; font-weight:700; }
+    :root{
+      --brand:#0b7bdc;
+      --muted:#6c757d;
+      --card:#ffffff;
+      --soft:#f5f9ff;
+    }
+    body { background: linear-gradient(180deg,#fbfdff,#f7fbff); font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; color:#102a43; }
+    .topbar { background:#fff; border-bottom:1px solid #eef3f8; }
+    .logo-mark { width:48px;height:48px;border-radius:10px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800 }
+    .product-hero { display:grid; grid-template-columns: 1fr 420px; gap:28px; align-items:start; margin:36px auto; max-width:1180px; padding:0 16px; }
+    @media (max-width:991px){ .product-hero{grid-template-columns:1fr; } .gallery-main{order:0} .info{order:1} }
+
+    /* gallery */
+    .gallery-card { background:var(--card); border-radius:14px; padding:18px; border:1px solid #eef6ff; box-shadow:0 8px 30px rgba(11,38,80,0.03); }
+    .gallery-main { display:flex; gap:12px; align-items:flex-start; }
+    .gallery-left { flex:1; display:flex; flex-direction:column; gap:12px; align-items:center; }
+    .main-img { width:100%; border-radius:12px; background:#fff; padding:18px; display:flex; align-items:center; justify-content:center; border:1px solid #eef6ff; max-height:520px; }
+    .main-img img { max-width:100%; max-height:460px; object-fit:contain; }
+    .thumbs { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; justify-content:center; }
+    .thumb { width:76px; height:76px; border-radius:8px; overflow:hidden; border:2px solid transparent; cursor:pointer; box-shadow:0 6px 20px rgba(11,38,80,0.03); }
+    .thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
+
+    /* info card */
+    .info-card { background:linear-gradient(180deg,#fff,#fbfdff); border-radius:14px; padding:22px; border:1px solid #eef6ff; box-shadow:0 8px 30px rgba(11,38,80,0.03); }
+    .product-title { font-size:1.5rem; font-weight:800; margin-bottom:6px; color:#0b2136; }
+    .tiny { color:var(--muted); font-size:0.92rem; }
+    .price { font-size:1.6rem; font-weight:900; color:var(--brand); }
+    .old-price { text-decoration: line-through; color:#9fb0c8; font-weight:600; margin-left:12px; font-size:0.95rem; }
+
+    .stock-badge { padding:8px 10px; border-radius:10px; font-weight:700; font-size:0.92rem; }
+    .buy-actions { margin-top:18px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .qty { width:110px; }
+
+    .color-swatch { width:34px;height:34px;border-radius:8px;border:2px solid #fff;box-shadow:0 6px 18px rgba(11,38,80,0.06);cursor:pointer;display:inline-block;margin-right:8px; }
+    .color-swatch.active { outline:3px solid rgba(11,123,220,0.18); transform:translateY(-2px); }
+
+    .size-btn { padding:6px 10px;border-radius:8px;border:1px solid #e6eefb;background:#fff;cursor:pointer;margin-right:6px;margin-bottom:6px; }
+    .size-btn.active { background:var(--brand); color:#fff; border-color:var(--brand); }
+
+    .tabs { margin-top:22px; }
+    .tab-pane { padding:14px 6px; background:#fff; border-radius:10px; border:1px solid #eef6ff; }
+
+    /* related */
+    .related { margin-top:30px; }
+    .related .card { border-radius:12px; border:1px solid #eef6ff; overflow:hidden; transition:transform .16s; }
+    .related .card:hover { transform:translateY(-6px); box-shadow:0 16px 40px rgba(11,38,80,0.06); }
+
+    footer.site-footer { margin-top:48px; padding:20px 0; color:#fff; background:linear-gradient(90deg,var(--brand),#0b5ea8); }
   </style>
 </head>
 <body>
 
-<!-- HEADER -->
-<header class="site-top">
-  <div class="container d-flex align-items-center gap-3 py-2">
-    <a href="index.php" class="brand">
-      <div class="brand-mark">AE</div>
+<!-- top nav minimal -->
+<header class="topbar">
+  <div class="container d-flex align-items-center justify-content-between py-2">
+    <a href="index.php" class="d-flex align-items-center gap-3 text-decoration-none">
+      <div class="logo-mark">AE</div>
       <div class="d-none d-md-block">
-        <div style="font-weight:800"><?= esc(site_name($conn)) ?></div>
-        <div style="font-size:12px;color:#6c757d">Thời trang nam cao cấp</div>
+        <div style="font-weight:800;color:#062a3b"><?= esc(site_name($conn)) ?></div>
+        <div style="font-size:13px;color:var(--muted)">Thời trang nam cao cấp</div>
       </div>
     </a>
-
-    <nav class="nav-center d-none d-lg-flex" role="navigation" aria-label="Main menu">
-      <a class="nav-link" href="index.php">Trang chủ</a>
-
-      <div class="nav-item dropdown">
-        <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown" aria-expanded="false">Sản phẩm</a>
-        <ul class="dropdown-menu p-2">
-          <?php if (!empty($cats)): foreach($cats as $c): ?>
-            <li><a class="dropdown-item" href="category.php?slug=<?= urlencode($c['slug'] ?? '') ?>"><?= esc($c['ten']) ?></a></li>
-          <?php endforeach; else: ?>
-            <li><span class="dropdown-item text-muted">Chưa có danh mục</span></li>
-          <?php endif; ?>
-          <li><hr class="dropdown-divider"></li>
-          <li><a class="dropdown-item" href="sanpham.php">Xem tất cả sản phẩm</a></li>
-        </ul>
-      </div>
-
-      <a class="nav-link" href="sale.php">Khuyến mãi</a>
-      <a class="nav-link" href="about.php">Giới thiệu</a>
-    </nav>
-
-    <div class="ms-auto d-flex align-items-center gap-2">
-      <form class="d-none d-lg-flex" action="sanpham.php" method="get" role="search">
-        <div class="input-group input-group-sm shadow-sm" style="border-radius:10px; overflow:hidden;">
-          <input name="q" class="form-control form-control-sm search-input" placeholder="Tìm sản phẩm, mã..." value="<?= esc($q) ?>">
-          <button class="btn btn-dark btn-sm" type="submit"><i class="bi bi-search"></i></button>
-        </div>
-      </form>
-
-      <div class="dropdown">
-        <a href="account.php" class="text-decoration-none d-flex align-items-center" data-bs-toggle="dropdown" aria-expanded="false">
-          <div class="icon-circle"><i class="bi bi-person-fill"></i></div>
-        </a>
-        <ul class="dropdown-menu dropdown-menu-end p-2">
-          <?php if (empty($_SESSION['user'])): ?>
-            <li><a class="dropdown-item" href="login.php">Đăng nhập</a></li>
-            <li><a class="dropdown-item" href="register.php">Tạo tài khoản</a></li>
-          <?php else: ?>
-            <li><a class="dropdown-item" href="account.php">Tài khoản</a></li>
-            <li><a class="dropdown-item" href="orders.php">Đơn hàng</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item text-danger" href="logout.php">Đăng xuất</a></li>
-          <?php endif; ?>
-        </ul>
-      </div>
-
-      <div class="dropdown">
-        <a href="#" id="cartMenu" data-bs-toggle="dropdown" class="text-decoration-none position-relative d-flex align-items-center">
-          <div class="icon-circle"><i class="bi bi-bag-fill"></i></div>
-          <span class="d-none d-md-inline ms-2 small">Giỏ hàng</span>
-          <span id="cart-count-badge" class="badge bg-danger rounded-pill cart-badge"><?= (int)$cart_count ?></span>
-        </a>
-        <div class="dropdown-menu dropdown-menu-end p-3" style="min-width:320px;">
-          <h6 class="mb-2">Giỏ hàng</h6>
-          <?php if (empty($_SESSION['cart'])): ?>
-            <div class="small text-muted">Chưa có sản phẩm.</div>
-            <div class="mt-3"><a href="sanpham.php" class="btn btn-sm btn-outline-primary w-100">Mua ngay</a></div>
-          <?php else: ?>
-            <div style="max-height:260px; overflow:auto;">
-              <?php $total=0; foreach($_SESSION['cart'] as $item):
-                $qty = isset($item['qty']) ? (int)$item['qty'] : (isset($item['sl']) ? (int)$item['sl'] : 1);
-                $price = isset($item['price']) ? (float)$item['price'] : (isset($item['gia']) ? (float)$item['gia'] : 0);
-                $name = $item['name'] ?? $item['ten'] ?? '';
-                $img = $item['img'] ?? $item['hinh'] ?? 'images/placeholder.jpg';
-                $subtotal = $qty * $price;
-                $total += $subtotal;
-              ?>
-                <div class="d-flex align-items-center py-2">
-                  <img src="<?= esc($img) ?>" style="width:56px;height:56px;object-fit:cover;border-radius:8px" alt="">
-                  <div class="ms-2 flex-grow-1">
-                    <div class="small fw-semibold"><?= esc($name) ?></div>
-                    <div class="small text-muted"><?= $qty ?> x <?= number_format($price,0,',','.') ?> ₫</div>
-                  </div>
-                  <div class="ms-2 small"><?= number_format($subtotal,0,',','.') ?> ₫</div>
-                </div>
-              <?php endforeach; ?>
-            </div>
-            <div class="d-flex justify-content-between align-items-center mt-3">
-              <div class="fw-semibold">Tạm tính</div>
-              <div class="fw-semibold"><?= number_format($total,0,',','.') ?> ₫</div>
-            </div>
-            <div class="mt-3 d-grid gap-2">
-              <a href="cart.php" class="btn btn-sm btn-outline-secondary">Giỏ hàng</a>
-              <a href="checkout.php" class="btn btn-sm btn-primary">Thanh toán</a>
-            </div>
-          <?php endif; ?>
-        </div>
-      </div>
-
-      <button class="btn btn-light d-lg-none ms-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileMenu" aria-controls="mobileMenu">
-        <i class="bi bi-list"></i>
-      </button>
+    <div class="d-flex align-items-center gap-3">
+      <a href="sanpham.php" class="btn btn-sm btn-outline-secondary">Danh sách sản phẩm</a>
+      <a href="cart.php" class="btn btn-sm btn-primary">Giỏ hàng <span class="badge bg-white text-primary"><?= (int)$cart_count ?></span></a>
     </div>
   </div>
 </header>
 
-<!-- Mobile offcanvas -->
-<div class="offcanvas offcanvas-start" tabindex="-1" id="mobileMenu" aria-labelledby="mobileMenuLabel">
-  <div class="offcanvas-header">
-    <h5 id="mobileMenuLabel"><?= esc(site_name($conn)) ?></h5>
-    <button type="button" class="btn-close text-reset" data-bs-dismiss="offcanvas" aria-label="Đóng"></button>
-  </div>
-  <div class="offcanvas-body">
-    <form action="sanpham.php" method="get" class="mb-3 d-flex">
-      <input class="form-control me-2" name="q" placeholder="Tìm sản phẩm..." value="<?= esc($q) ?>">
-      <button class="btn btn-dark">Tìm</button>
-    </form>
-    <ul class="list-unstyled">
-      <li class="mb-2"><a href="index.php" class="text-decoration-none">Trang chủ</a></li>
-      <li class="mb-2"><a href="sanpham.php" class="text-decoration-none">Sản phẩm</a></li>
-      <?php foreach($cats as $c): ?>
-        <li class="mb-2 ps-2"><a href="category.php?slug=<?= urlencode($c['slug'] ?? '') ?>" class="text-decoration-none"><?= esc($c['ten']) ?></a></li>
-      <?php endforeach; ?>
-      <li class="mb-2"><a href="sale.php" class="text-decoration-none">Khuyến mãi</a></li>
-      <li class="mb-2"><a href="about.php" class="text-decoration-none">Giới thiệu</a></li>
-    </ul>
-  </div>
-</div>
+<main class="container">
+  <div class="product-hero">
 
-<!-- PAGE CONTENT -->
-<div class="container my-5">
-  <div class="d-flex justify-content-between mb-4 align-items-center">
-    <h3 class="mb-0">Sản phẩm</h3>
-    <a href="index.php" class="btn btn-link">&larr; Trang chủ</a>
-  </div>
+    <!-- LEFT: gallery -->
+    <div class="gallery-card gallery-main">
+      <div class="gallery-left" style="width:100%">
+        <div class="main-img" id="main-img-box">
+          <img id="mainImg" src="<?= esc($mainImage) ?>" alt="<?= esc($product['ten']) ?>">
+        </div>
 
-  <div class="row g-3">
-    <div class="col-md-3">
-      <div class="card p-3">
-        <form method="get" action="sanpham.php">
-          <label class="form-label small">Tìm kiếm</label>
-          <input name="q" value="<?= esc($q) ?>" class="form-control mb-3" placeholder="Tên sản phẩm...">
-          <label class="form-label small">Danh mục</label>
-          <select name="cat" class="form-select mb-3">
-            <option value="0">Tất cả</option>
-            <?php foreach ($cats as $c): ?>
-              <option value="<?= (int)$c['id_danh_muc'] ?>" <?= $cat === (int)$c['id_danh_muc'] ? 'selected':'' ?>><?= esc($c['ten']) ?></option>
-            <?php endforeach; ?>
-          </select>
-          <button class="btn btn-primary w-100">Lọc</button>
-        </form>
-        <hr>
-        <div class="small text-muted">Hiển thị <?= count($products) ?> / <?= $total_items ?> sản phẩm</div>
+        <div class="thumbs" id="thumbs">
+          <?php foreach ($images as $i => $p): ?>
+            <div class="thumb" data-src="<?= esc($p) ?>">
+              <img src="<?= esc($p) ?>" alt="thumb-<?= $i ?>">
+            </div>
+          <?php endforeach; ?>
+        </div>
       </div>
     </div>
 
-    <div class="col-md-9">
-      <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 g-3">
-        <?php if (empty($products)): ?>
-          <div class="col-12"><div class="alert alert-info">Không tìm thấy sản phẩm.</div></div>
+    <!-- RIGHT: info -->
+    <aside class="info-card info">
+      <?php if (!empty($product['danh_muc_ten'])): ?>
+        <div class="tiny mb-1"><?= esc($product['danh_muc_ten']) ?></div>
+      <?php endif; ?>
+      <div class="product-title"><?= esc($product['ten']) ?></div>
+
+      <div class="d-flex align-items-center gap-3 mb-2">
+        <div class="price"><?= price($product['gia']) ?></div>
+        <?php if (!empty($product['gia_cu']) && $product['gia_cu'] > $product['gia']): ?>
+          <div class="old-price"><?= number_format($product['gia_cu'],0,',','.') ?> ₫</div>
+          <div class="badge bg-danger text-white" style="padding:6px 8px;border-radius:10px;font-weight:700;">
+            -<?= (int)round((($product['gia_cu']-$product['gia'])/$product['gia_cu'])*100) ?>%
+          </div>
         <?php endif; ?>
+      </div>
 
-        <?php foreach ($products as $p):
-          $pid = (int)$p['id_san_pham'];
-          $img = $p['img'] ?: 'images/placeholder.jpg';
-          $name = $p['ten'];
-          $price = (float)$p['gia'];
-          $detailUrl = 'sanpham_chitiet.php?id=' . $pid;
-        ?>
-        <div class="col">
-          <div class="card card-product h-100">
-            <a href="<?= esc($detailUrl) ?>" class="text-decoration-none text-dark">
-              <img src="<?= esc($img) ?>" class="prod-img" alt="<?= esc($name) ?>">
-            </a>
-            <div class="card-body d-flex flex-column">
-              <?php if (!empty($p['danh_muc_ten'])): ?><div class="small text-muted"><?= esc($p['danh_muc_ten']) ?></div><?php endif; ?>
-              <a href="<?= esc($detailUrl) ?>" class="text-decoration-none text-dark"><h6><?= esc($name) ?></h6></a>
-              <div class="price mb-3"><?= price($price) ?></div>
+      <div class="tiny text-muted mb-3"><?= nl2br(esc(mb_substr(strip_tags($product['mo_ta'] ?? ''),0,220))) ?></div>
 
-              <!-- form fallback (will submit to cart.php?action=add) -->
-              <form method="post" action="<?= esc(dirname($_SERVER['PHP_SELF']) . '/cart.php?action=add') ?>" class="mt-auto d-grid">
-                <input type="hidden" name="id" value="<?= $pid ?>">
-                <input type="hidden" name="qty" value="1">
-                <input type="hidden" name="back" value="<?= esc($_SERVER['REQUEST_URI']) ?>">
-                <button type="submit" class="btn btn-outline-primary add-to-cart-btn" data-id="<?= $pid ?>">
-                  <i class="bi bi-cart-plus"></i> Thêm vào giỏ
-                </button>
-              </form>
+      <div class="d-flex align-items-center gap-3 mb-3">
+        <div class="stock-badge badge <?= ((int)$product['so_luong']>0)?'bg-success text-white':'bg-secondary text-white' ?>">
+          <?= ((int)$product['so_luong']>0)?('Còn ' . (int)$product['so_luong'].' sản phẩm'):'Hết hàng' ?>
+        </div>
+        <div class="tiny text-muted">Mã: <?= esc($product['ma_san_pham'] ?? '#'.$product['id_san_pham']) ?></div>
+      </div>
 
+      <!-- options (dummy) -->
+      <div>
+        <div class="mb-2"><strong>Màu sắc</strong></div>
+        <div id="swatches" class="mb-3">
+          <!-- show a few colored swatches (if DB has color info you can replace) -->
+          <span class="color-swatch" data-color="#0b7bdc" style="background:#0b7bdc"></span>
+          <span class="color-swatch" data-color="#111111" style="background:#111"></span>
+          <span class="color-swatch" data-color="#7a6f6f" style="background:#7a6f6f"></span>
+        </div>
+
+        <div class="mb-2"><strong>Kích thước</strong></div>
+        <div id="sizes" class="mb-3">
+          <button type="button" class="size-btn">S</button>
+          <button type="button" class="size-btn active">M</button>
+          <button type="button" class="size-btn">L</button>
+          <button type="button" class="size-btn">XL</button>
+        </div>
+      </div>
+
+      <div class="buy-actions">
+        <form id="addForm" method="post" action="cart.php?action=add" class="d-flex align-items-center gap-2">
+          <input type="hidden" name="id" value="<?= (int)$product['id_san_pham'] ?>">
+          <input type="number" name="qty" value="1" min="1" class="form-control qty">
+          <button id="addBtn" class="btn btn-primary px-4 py-2" type="submit"><i class="bi bi-cart-plus me-2"></i>Thêm vào giỏ</button>
+        </form>
+        <a href="checkout.php" class="btn btn-outline-success px-4 py-2">Mua ngay</a>
+      </div>
+
+      <div class="tabs">
+        <ul class="nav nav-tabs" id="detailTab" role="tablist">
+          <li class="nav-item" role="presentation"><button class="nav-link active" id="desc-tab" data-bs-toggle="tab" data-bs-target="#desc" type="button">Mô tả</button></li>
+          <li class="nav-item" role="presentation"><button class="nav-link" id="spec-tab" data-bs-toggle="tab" data-bs-target="#spec" type="button">Thông số</button></li>
+          <li class="nav-item" role="presentation"><button class="nav-link" id="rev-tab" data-bs-toggle="tab" data-bs-target="#rev" type="button">Đánh giá</button></li>
+        </ul>
+        <div class="tab-content mt-3">
+          <div class="tab-pane fade show active tab-pane" id="desc">
+            <div class="small text-muted"><?= nl2br(esc($product['mo_ta'] ?? 'Không có mô tả chi tiết.')) ?></div>
+          </div>
+          <div class="tab-pane fade tab-pane" id="spec">
+            <div class="specs small text-muted">
+              <div><strong>Loại:</strong> <?= esc($product['danh_muc_ten'] ?? 'N/A') ?></div>
+              <div><strong>Nhà cung cấp:</strong> <?= esc($product['id_ncc'] ?? 'N/A') ?></div>
+              <div><strong>Số lượng:</strong> <?= (int)$product['so_luong'] ?></div>
+              <div><strong>Trạng thái:</strong> <?= ((int)$product['trang_thai']? 'Hiển thị':'Ẩn') ?></div>
             </div>
           </div>
+          <div class="tab-pane fade tab-pane" id="rev">
+            <div class="small text-muted">Chưa có đánh giá. Hãy là người đánh giá đầu tiên!</div>
+          </div>
         </div>
-        <?php endforeach; ?>
       </div>
-
-      <!-- pagination -->
-      <nav class="mt-4">
-        <ul class="pagination">
-          <?php
-            $start = max(1, $page - 3);
-            $end = min($total_pages, $page + 3);
-            if ($page > 1) echo '<li class="page-item"><a class="page-link" href="'. buildUrl(['page'=>$page-1]) .'">&laquo;</a></li>';
-            else echo '<li class="page-item disabled"><span class="page-link">&laquo;</span></li>';
-            for ($i=$start;$i<=$end;$i++){
-              if ($i==$page) echo '<li class="page-item active"><span class="page-link">'.$i.'</span></li>';
-              else echo '<li class="page-item"><a class="page-link" href="'. buildUrl(['page'=>$i]) .'">'.$i.'</a></li>';
-            }
-            if ($page < $total_pages) echo '<li class="page-item"><a class="page-link" href="'. buildUrl(['page'=>$page+1]) .'">&raquo;</a></li>';
-            else echo '<li class="page-item disabled"><span class="page-link">&raquo;</span></li>';
-          ?>
-        </ul>
-      </nav>
-
-    </div>
+    </aside>
   </div>
-</div>
 
-<!-- scripts -->
+  <!-- related -->
+  <?php if (!empty($related)): ?>
+  <section class="related container mt-4">
+    <h5 class="mb-3">Sản phẩm liên quan</h5>
+    <div class="row g-3">
+      <?php foreach ($related as $r): 
+        $rimg = getProductImagesFromDB($conn, $r['id_san_pham'])[0] ?? 'images/placeholder.jpg';
+      ?>
+        <div class="col-6 col-md-3">
+          <a href="sanpham_chitiet.php?id=<?= (int)$r['id_san_pham'] ?>" class="text-decoration-none text-dark">
+            <div class="card p-2">
+              <img src="<?= esc($rimg) ?>" style="height:160px;object-fit:contain;width:100%;background:#fff;border-radius:6px" alt="<?= esc($r['ten']) ?>">
+              <div class="p-2">
+                <div class="small text-muted mb-1"><?= esc(mb_strimwidth($r['ten'],0,50,'...')) ?></div>
+                <div class="fw-semibold"><?= price($r['gia']) ?></div>
+              </div>
+            </div>
+          </a>
+        </div>
+      <?php endforeach; ?>
+    </div>
+  </section>
+  <?php endif; ?>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container text-center text-white">
+    <small><?= esc(site_name($conn)) ?> © <?= date('Y') ?> — Hotline: 0123 456 789</small>
+  </div>
+</footer>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-
-<!-- simple AJAX add-to-cart: sends POST to cart.php?action=add with ajax=1 -->
 <script>
-document.addEventListener('DOMContentLoaded', function(){
-  document.querySelectorAll('.add-to-cart-btn').forEach(function(btn){
-    btn.addEventListener('click', async function(e){
-      // prevent form submit to use AJAX
-      e.preventDefault();
-      const id = this.dataset.id;
-      const form = this.closest('form');
-      if (!form) return;
-      const formData = new FormData(form);
-      formData.append('ajax', '1');
-      try {
-        const res = await fetch(form.action, {
-          method: 'POST',
-          body: formData,
-          credentials: 'same-origin',
-          headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        if (data.success) {
-          // quick UI feedback
-          const old = btn.innerHTML;
-          btn.classList.remove('btn-outline-primary'); btn.classList.add('btn-success');
-          btn.innerHTML = '<i class="bi bi-check-lg"></i> Đã thêm';
-          // update cart count badge if exists
-          const el = document.querySelector('#cart-count-badge');
-          if (el && data.cart && typeof data.cart.items_count !== 'undefined') {
-            el.textContent = data.cart.items_count;
-          }
-          setTimeout(()=>{ btn.classList.remove('btn-success'); btn.classList.add('btn-outline-primary'); btn.innerHTML = old; }, 1500);
-        } else {
-          alert(data.message || 'Không thể thêm vào giỏ.');
-          form.submit(); // fallback
-        }
-      } catch (err) {
-        console.error(err);
-        // fallback to normal submit
-        form.submit();
-      }
-    });
+// thumbnail clicks -> main image
+document.querySelectorAll('.thumb').forEach(function(t){
+  t.addEventListener('click', function(){
+    var src = this.getAttribute('data-src');
+    document.getElementById('mainImg').src = src;
+    document.querySelectorAll('.thumb').forEach(x=>x.style.borderColor='transparent');
+    this.style.borderColor = 'rgba(11,123,220,0.18)';
   });
 });
-</script>
 
+// swatches & sizes interactions
+document.querySelectorAll('.color-swatch').forEach(function(s){
+  s.addEventListener('click', function(){ document.querySelectorAll('.color-swatch').forEach(x=>x.classList.remove('active')); this.classList.add('active'); });
+});
+document.querySelectorAll('.size-btn').forEach(function(b){
+  b.addEventListener('click', function(){ document.querySelectorAll('.size-btn').forEach(x=>x.classList.remove('active')); this.classList.add('active'); });
+});
+
+// AJAX add-to-cart (fallback to normal form submit)
+document.getElementById('addForm').addEventListener('submit', async function(e){
+  e.preventDefault();
+  const f = this;
+  const data = new FormData(f);
+  data.append('ajax','1');
+  try {
+    const res = await fetch(f.action, { method:'POST', body:data, credentials:'same-origin', headers:{'X-Requested-With':'XMLHttpRequest'} });
+    const json = await res.json();
+    if (json.success) {
+      const btn = document.getElementById('addBtn');
+      btn.classList.remove('btn-primary'); btn.classList.add('btn-success');
+      btn.innerHTML = '<i class="bi bi-check-lg me-2"></i>Đã thêm';
+      // update cart badge if present
+      var badge = document.querySelector('.topbar .badge');
+      if (badge && json.cart && json.cart.items_count !== undefined) badge.textContent = json.cart.items_count;
+      setTimeout(()=>{ btn.classList.remove('btn-success'); btn.classList.add('btn-primary'); btn.innerHTML = '<i class="bi bi-cart-plus me-2"></i>Thêm vào giỏ'; }, 1400);
+    } else {
+      alert(json.message || 'Không thể thêm vào giỏ');
+      f.submit();
+    }
+  } catch (err) {
+    console.error(err);
+    f.submit();
+  }
+});
+</script>
 </body>
 </html>
