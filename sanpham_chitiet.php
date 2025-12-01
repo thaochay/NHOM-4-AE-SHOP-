@@ -1,12 +1,12 @@
 <?php
-// sanpham_chitiet.php - full file with size click blue flash + related products with promo badge
+// sanpham_chitiet.php - full file with size click blue flash + related products with promo badge + blue "Quay lại sản phẩm" button
 session_start();
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/inc/helpers.php';
 
 /* fallback helpers */
 if (!function_exists('esc')) {
-    function esc($v){ return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
+    function esc($v){ return htmlspecialchars((string)($v ?? ''), ENT_QUOTES, 'UTF-8'); }
 }
 if (!function_exists('price')) {
     function price($v){ return number_format((float)$v,0,',','.') . ' ₫'; }
@@ -99,18 +99,27 @@ try {
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
   <style>
     :root{
-      --accent: #ef4444; /* red */
+      --accent: #ef4444; /* red for add button */
       --accent-dark: #d02424;
       --muted: #6b7280;
       --card: #fff;
       --soft: #fbfdff;
       --border: #eef6ff;
       --blue-flash: rgba(11,123,220,0.14);
-      --blue-solid: #0b7bdc;
+      --blue-solid: #0b7bdc; /* blue for back button */
     }
-    body{ background: linear-gradient(180deg,#fbfdff,#f7fbff); font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial; color:#0f1724; }
+    body{ background: linear-gradient(180deg,#fbfdff,#f7fbff); font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial; color:#0f1724; margin:0; }
     .container-main { max-width:1180px; margin:28px auto; padding:0 12px; display:grid; grid-template-columns: 1fr 480px; gap:28px; align-items:start; }
     @media(max-width:992px){ .container-main{ grid-template-columns:1fr; } }
+
+    /* GO BACK BUTTON */
+    .btn-back-blue {
+      display:inline-flex; align-items:center; gap:8px;
+      background: linear-gradient(180deg,var(--blue-solid), #0866b5);
+      color:#fff; padding:8px 14px; border-radius:10px; text-decoration:none; font-weight:700; box-shadow:0 8px 26px rgba(11,123,220,0.16);
+      border:0;
+    }
+    .btn-back-blue .bi { font-size:1.05rem; }
 
     /* gallery */
     .gallery { background:var(--card); border-radius:12px; padding:18px; border:1px solid var(--border); box-shadow:0 10px 30px rgba(2,6,23,0.04); }
@@ -177,6 +186,14 @@ try {
 <body>
 
 <div class="container-main">
+
+  <!-- GO BACK BUTTON (blue) -->
+  <div style="grid-column:1/-1; margin-bottom:10px;">
+    <a href="sanpham.php" class="btn-back-blue" title="Quay lại danh sách sản phẩm">
+      <i class="bi bi-arrow-left"></i> Quay lại sản phẩm
+    </a>
+  </div>
+
   <!-- LEFT: gallery -->
   <div class="gallery">
     <div class="main-image" id="mainImageBox" title="Click để phóng to">
