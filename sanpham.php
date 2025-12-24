@@ -1,5 +1,7 @@
 <?php
-// sanpham.php - danh sách sản phẩm (AE Shop) - menu 1 dòng, nút thêm đỏ, UI gọn hơn
+// sanpham.php - danh sách sản phẩm + hỗ trợ category slug + quickview
+// (Sửa: QuickView hoạt động khi bấm Thêm; AJAX add-to-cart; mini-cart tap; price slider)
+
 session_start();
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/inc/helpers.php';
@@ -44,20 +46,61 @@ function getProductImage($conn, $product_id) {
     return ltrim($path, '/') ?: $placeholder;
 }
 
-/* --- load categories --- */
+/* --- load categories for sidebar/menu --- */
 try {
     $cats = $conn->query("SELECT * FROM danh_muc WHERE trang_thai=1 ORDER BY thu_tu ASC")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $cats = [];
 }
 
-/* --- params: q, cat, page --- */
+/* get max price from products (for slider max) */
+try {
+    $maxPriceRow = $conn->query("SELECT MAX(gia) AS mx FROM san_pham WHERE trang_thai=1")->fetch(PDO::FETCH_ASSOC);
+    $maxPrice = $maxPriceRow && !empty($maxPriceRow['mx']) ? (int)$maxPriceRow['mx'] : 3000000;
+    // round up to nearest 100k
+    $maxPrice = ceil($maxPrice / 100000) * 100000;
+} catch (Exception $e) {
+    $maxPrice = 3000000;
+}
+
+/* --- slug support: nếu có slug thì lấy id danh mục tương ứng --- */
+$slug = trim((string)($_GET['slug'] ?? ''));
+$slugCategory = null;
+if ($slug !== '') {
+    try {
+        $sstmt = $conn->prepare("SELECT id_danh_muc, ten FROM danh_muc WHERE slug = :s LIMIT 1");
+        $sstmt->execute([':s' => $slug]);
+        $row = $sstmt->fetch(PDO::FETCH_ASSOC);
+        if ($row) {
+            $slugCategory = (int)$row['id_danh_muc'];
+            $slugCategoryName = $row['ten'];
+        } else {
+            header('Location: sanpham.php');
+            exit;
+        }
+    } catch (Exception $e) {
+        $slugCategory = null;
+    }
+}
+
+/* --- params: q, cat (id), page --- */
 $q = trim((string)($_GET['q'] ?? ''));
 $cat = (int)($_GET['cat'] ?? 0);
 $page = max(1, (int)($_GET['page'] ?? 1));
 $per_page = 12;
 $offset = ($page - 1) * $per_page;
 
+/* filter params from form (GET) */
+$price_min = (int)($_GET['price_min'] ?? 0);
+$price_max = (int)($_GET['price_max'] ?? 0);
+if ($price_max <= 0) $price_max = $maxPrice;
+
+/* Nếu có slugCategory, ưu tiên filter theo slug (dùng id từ slug) */
+if ($slugCategory !== null) {
+    $cat = $slugCategory;
+}
+
+/* build where clause */
 $where = "WHERE sp.trang_thai = 1";
 $params = [];
 if ($q !== '') {
@@ -68,13 +111,29 @@ if ($cat > 0) {
     $where .= " AND sp.id_danh_muc = :cat";
     $params[':cat'] = $cat;
 }
+if ($price_min > 0) {
+    $where .= " AND sp.gia >= :pmin";
+    $params[':pmin'] = $price_min;
+}
+if ($price_max > 0) {
+    $where .= " AND sp.gia <= :pmax";
+    $params[':pmax'] = $price_max;
+}
 
-/* total count */
+/* total count filtered */
 $countSql = "SELECT COUNT(*) FROM san_pham sp $where";
 $countStmt = $conn->prepare($countSql);
 $countStmt->execute($params);
 $total_items = (int)$countStmt->fetchColumn();
 $total_pages = max(1, (int)ceil($total_items / $per_page));
+
+/* total count ALL products in shop (trang_thai=1) */
+try {
+    $total_all_row = $conn->query("SELECT COUNT(*) as cnt FROM san_pham WHERE trang_thai=1")->fetch(PDO::FETCH_ASSOC);
+    $total_all = $total_all_row ? (int)$total_all_row['cnt'] : 0;
+} catch (Exception $e) {
+    $total_all = 0;
+}
 
 /* fetch products */
 $sql = "
@@ -102,21 +161,37 @@ foreach ($_SESSION['cart'] as $it) {
 /* user */
 $user_name = !empty($_SESSION['user']['ten']) ? $_SESSION['user']['ten'] : null;
 
-/* helper */
+/* helper build url (preserve current filters when paginating) */
 function buildUrl($overrides = []) {
     $qs = array_merge($_GET, $overrides);
     return basename($_SERVER['PHP_SELF']) . '?' . http_build_query($qs);
 }
 
-$site_name = function_exists('site_name') ? site_name($conn) : 'AE Shop';
+$site_name = function_exists('site_name') ? site_name($conn) : 'AE SHOP';
 $accent = '#0b7bdc';
 $red = '#dc2626';
+
+if ($slugCategory !== null) {
+    $pageTitle = esc($slugCategoryName) . ' — ' . esc($site_name);
+    $pageHeading = esc($slugCategoryName);
+} else if ($cat > 0) {
+    $catName = '';
+    foreach ($cats as $c) if ((int)$c['id_danh_muc'] === $cat) { $catName = $c['ten']; break; }
+    $pageTitle = ($catName ? esc($catName) . ' — ' : '') . 'Sản phẩm — ' . esc($site_name);
+    $pageHeading = $catName ?: 'Sản phẩm';
+} else if ($q !== '') {
+    $pageTitle = 'Tìm: ' . esc($q) . ' — ' . esc($site_name);
+    $pageHeading = 'Kết quả tìm kiếm';
+} else {
+    $pageTitle = 'Sản phẩm — ' . esc($site_name);
+    $pageHeading = 'Sản phẩm';
+}
 ?>
 <!doctype html>
 <html lang="vi">
 <head>
   <meta charset="utf-8">
-  <title>Sản phẩm — <?= esc($site_name) ?></title>
+  <title><?= $pageTitle ?></title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
@@ -124,186 +199,209 @@ $red = '#dc2626';
     :root{ --accent: <?= $accent ?>; --muted:#6c757d; --card-radius:10px; --card-shadow: 0 10px 30px rgba(11,37,74,0.06); --danger: <?= $red ?>; }
     body{ font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial; background:#f6fbff; color:#071428; margin:0; font-size:14px; }
     .container-main{ max-width:1200px; margin:0 auto; padding:0 12px; }
+
     /* header (1-line menu) */
     .ae-header{ background:#fff; border-bottom:1px solid #eef3f8; position:sticky; top:0; z-index:1100; padding:10px 0; }
-    .brand-mark{ width:44px;height:44px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px; }
     .nav-center{ display:flex; gap:6px; align-items:center; justify-content:center; flex:1; white-space:nowrap; }
     .nav-link{ color:#1f2937; padding:6px 10px; border-radius:8px; text-decoration:none; font-weight:600; font-size:14px; }
     .nav-link:hover, .nav-link.active{ color:var(--accent); background:rgba(11,123,220,0.06); }
+
+    /* BRAND / LOGO (AE style) */
+    .brand {
+      display:flex;
+      align-items:center;
+      gap:12px;
+      text-decoration:none;
+    }
+
+    .brand-logo {
+      width:56px;
+      height:56px;
+      border-radius:12px;
+      background: var(--accent);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      box-shadow: 0 8px 22px rgba(11,37,74,0.12);
+      flex-shrink:0;
+      overflow:hidden;
+    }
+    .brand-logo img { width:100%; height:100%; object-fit:cover; display:block; }
+    .brand-initials {
+      font-weight:900;
+      font-size:18px;
+      color:#fff;
+      letter-spacing:1px;
+    }
+    .brand-text {
+      display:flex;
+      flex-direction:column;
+      line-height:1;
+    }
+    .brand-title {
+      font-weight:900;
+      font-size:16px;
+      color:#07203a;
+      margin:0;
+      letter-spacing:0.2px;
+    }
+    .brand-sub {
+      font-size:12px;
+      color:var(--muted);
+      margin-top:2px;
+    }
 
     /* compact layout */
     .page-wrap{ padding:18px 0; }
     .page-head{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
     .page-head h3{ margin:0; font-size:1.05rem; font-weight:800; color:#07203a; }
 
-    aside .filter-card{ background:#fff; padding:12px; border-radius:var(--card-radius); box-shadow:var(--card-shadow); border:1px solid rgba(11,37,74,0.03); font-size:13px; }
+    aside .filter-card{ background:#fff; padding:14px; border-radius:12px; box-shadow:var(--card-shadow); border:1px solid rgba(11,37,74,0.03); font-size:13px; }
     @media(min-width:992px){ aside .filter-card{ position:sticky; top:80px; } }
 
-    /* tighter grid */
-    .products-grid{ display:grid; grid-template-columns: repeat(2,1fr); gap:12px; }
+    .filter-title{ font-weight:800; font-size:18px; margin:0 0 12px 0; }
+    .filter-section{ border-top:1px dashed #eef3f8; padding-top:12px; margin-top:12px; }
+    .filter-section h6{ margin:0; display:flex; justify-content:space-between; align-items:center; font-size:14px; font-weight:700; }
+
+    /* ===== CENTERED KNOB PRICE SLIDER ===== */
+    .price-box {
+      background: #ffffff;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(11, 37, 74, 0.05);
+      margin-top: 8px;
+    }
+    .price-title { font-weight:800; color:#07203a; margin-bottom:6px; font-size:14px; }
+
+    .slider-container {
+      position: relative;
+      height: 64px;
+      margin-top: 6px;
+    }
+    /* main track centered vertically */
+    .slider-track {
+      position: absolute;
+      height: 8px;
+      background: #333; /* fallback */
+      background: #e9eef8;
+      left: 0;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      border-radius: 8px;
+    }
+    .slider-range {
+      position: absolute;
+      height: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: linear-gradient(90deg,var(--accent), #0b6ff0);
+      border-radius: 8px;
+    }
+
+    /* range inputs: put thumbs in the center of the track */
+    input[type="range"] {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%); /* <-- centers thumb vertically */
+      width: 100%;
+      -webkit-appearance: none;
+      background: transparent;
+      pointer-events: none; /* allow only thumb interaction - thumb overrides */
+    }
+    /* thumb centered and slightly larger */
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      height: 22px;
+      width: 22px;
+      border-radius: 50%;
+      background: #fff;
+      border: 4px solid var(--accent);
+      box-shadow: 0 6px 18px rgba(9,30,66,0.14);
+      cursor: pointer;
+      pointer-events: auto;
+    }
+    input[type="range"]::-moz-range-thumb {
+      height: 22px;
+      width: 22px;
+      border-radius: 50%;
+      background: #fff;
+      border: 4px solid var(--accent);
+      box-shadow: 0 6px 18px rgba(9,30,66,0.14);
+      cursor: pointer;
+      pointer-events: auto;
+    }
+
+    /* small floating value badges above knobs */
+    .slider-value {
+      position: absolute;
+      top: 8px; /* keep above the centered track */
+      background: #fff;
+      border: 1px solid #eef6ff;
+      padding: 4px 8px;
+      border-radius: 8px;
+      font-weight:700;
+      font-size:12px;
+      color:#07203a;
+      box-shadow: 0 6px 18px rgba(9,30,66,0.06);
+      transform: translateX(-50%);
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    .price-labels {
+      display:flex;
+      justify-content:space-between;
+      margin-top:14px;
+      font-size:13px;
+      color:#6c7a92;
+    }
+
+    /* product card styles */
+    .products-grid{ display:grid; grid-template-columns: repeat(2,1fr); gap:16px; align-items:stretch; }
     @media(min-width:576px){ .products-grid{ grid-template-columns: repeat(3,1fr); } }
     @media(min-width:992px){ .products-grid{ grid-template-columns: repeat(4,1fr); } }
+    .card-pro { border-radius:12px; background:#fff; padding:0; overflow:hidden; box-shadow:0 10px 30px rgba(9,30,66,0.04); display:flex; flex-direction:column; position:relative; }
+    .card-media{ padding:12px; display:flex; align-items:center; justify-content:center; background:#fbfdff; }
+    .card-body-pro{ padding:12px; display:flex; flex-direction:column; gap:8px; flex:1; }
 
-    .card-product{ background:#fff; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; height:100%; transition:transform .12s ease, box-shadow .12s ease; border:1px solid rgba(11,37,74,0.03); }
-    .card-product:hover{ transform:translateY(-6px); box-shadow:var(--card-shadow); }
-    .card-media{ padding:12px; display:flex; align-items:center; justify-content:center; min-height:170px; background:linear-gradient(180deg,#fff,#fbfdff); }
-    .card-media img{ width:100%; max-height:170px; object-fit:contain; display:block; }
-
-    .card-body{ padding:10px 12px 12px; display:flex; flex-direction:column; gap:6px; flex-grow:1; font-size:13px; }
-    .product-title{ font-size:0.95rem; font-weight:700; color:#071428; line-height:1.2; min-height:2.2em; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; text-decoration:none; }
-    .product-meta{ display:flex; align-items:center; gap:8px; justify-content:space-between; margin-top:2px; }
-    .price-current{ font-weight:800; color:var(--accent); font-size:0.97rem; }
-    .price-old{ color:var(--muted); text-decoration:line-through; font-size:0.85rem; }
-
-    .product-ctas{ display:flex; gap:8px; margin-top:auto; align-items:center; }
-    .btn-view{ border:1px solid rgba(11,37,74,0.06); background:#fff; color:var(--accent); padding:8px 10px; border-radius:8px; width:48%; display:flex; align-items:center; justify-content:center; gap:6px; text-decoration:none; font-size:13px; }
-    .btn-buy{ background:var(--danger); border:0; color:#fff; padding:8px 10px; border-radius:8px; width:52%; display:flex; align-items:center; justify-content:center; gap:6px; font-size:13px; box-shadow: 0 6px 18px rgba(220,38,38,0.12); }
-
-    .badge-discount{ position:absolute; left:10px; top:10px; background:#ef4444;color:#fff;padding:5px 7px;border-radius:8px;font-weight:700; font-size:12px; box-shadow:0 8px 18px rgba(14,20,30,0.12); }
-
-    .small-muted{ color:var(--muted); font-size:12.5px; }
-
-    .pagination .page-link{ color:#0b1724; font-size:13px; padding:6px 9px; }
-    .pagination .page-item.active .page-link{ background:var(--accent); border-color:var(--accent); color:#fff; }
-
-    @media(max-width:991px){
-      .nav-center{ display:none; }
-      .search-inline{ display:none; }
-      .brand-mark{ width:40px;height:40px; }
+    /* mini cart slide-in panel (tap) */
+    .mini-cart-tap {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 2100;
+      width: 300px;
+      max-width: calc(100% - 36px);
+      border-radius: 12px;
+      box-shadow: 0 12px 40px rgba(9,30,66,0.12);
+      background: #fff;
+      overflow: hidden;
+      transform: translateY(12px);
+      opacity: 0;
+      transition: transform .28s ease, opacity .28s ease;
     }
+    .mini-cart-tap.show { transform: translateY(0); opacity: 1; }
+    .mini-cart-tap .mc-body { padding:12px; }
+    .mini-cart-tap .mc-footer { padding:10px; border-top:1px solid #eef3f8; display:flex; gap:8px; }
   </style>
 </head>
 <body>
-
-<!-- HEADER -->
-<header class="ae-header">
-  <div class="container container-main d-flex align-items-center gap-3">
-    <a class="d-flex align-items-center gap-2 text-decoration-none" href="index.php" aria-label="<?= esc($site_name) ?>">
-      <div class="brand-mark"><?= strtoupper(substr(preg_replace('/\s+/', '', strip_tags($site_name)),0,3)) ?></div>
-      <div class="d-none d-md-block">
-        <div style="font-weight:700; font-size:15px;"><?= esc($site_name) ?></div>
-      </div>
-    </a>
-
-    <nav class="nav-center" role="navigation" aria-label="Main menu">
-      <a class="nav-link" href="index.php">Trang chủ</a>
-
-      <div class="dropdown">
-        <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown" aria-expanded="false">Danh mục</a>
-        <ul class="dropdown-menu p-1">
-          <?php if (!empty($cats)): foreach($cats as $c): ?>
-            <li><a class="dropdown-item small" href="category.php?slug=<?= urlencode($c['slug']) ?>"><?= esc($c['ten']) ?></a></li>
-          <?php endforeach; else: ?>
-            <li><span class="dropdown-item text-muted small">Chưa có danh mục</span></li>
-          <?php endif; ?>
-          <li><hr class="dropdown-divider my-1"></li>
-          <li><a class="dropdown-item text-muted small" href="sanpham.php">Xem tất cả</a></li>
-        </ul>
-      </div>
-
-      <a class="nav-link active" href="sanpham.php">Sản phẩm</a>
-      <a class="nav-link" href="about.php">Giới thiệu</a>
-      <a class="nav-link" href="contact.php">Liên hệ</a>
-    </nav>
-
-    <div class="ms-auto d-flex align-items-center gap-2">
-      <form class="d-none d-lg-flex search-inline" action="sanpham.php" method="get" role="search">
-        <div class="input-group shadow-sm" style="border-radius:8px; overflow:hidden;">
-          <input name="q" class="form-control form-control-sm" placeholder="Tìm sản phẩm, mã..." value="<?= esc($_GET['q'] ?? '') ?>">
-          <button class="btn btn-light btn-sm" type="submit"><i class="bi bi-search"></i></button>
-        </div>
-      </form>
-
-      <div class="dropdown">
-        <a class="text-decoration-none d-flex align-items-center" href="#" data-bs-toggle="dropdown" aria-expanded="false" style="gap:8px;">
-          <div style="width:36px;height:36px;border-radius:8px;background:#f6f8fb;display:flex;align-items:center;justify-content:center;color:#0b1220"><i class="bi bi-person-fill"></i></div>
-          <div class="d-none d-md-block small-muted"><?= $user_name ? esc($user_name) : 'Tài khoản' ?></div>
-        </a>
-        <ul class="dropdown-menu dropdown-menu-end p-1">
-          <?php if(empty($_SESSION['user'])): ?>
-            <li><a class="dropdown-item small" href="login.php">Đăng nhập</a></li>
-            <li><a class="dropdown-item small" href="register.php">Tạo tài khoản</a></li>
-          <?php else: ?>
-            <li><a class="dropdown-item small" href="account.php">Tài khoản</a></li>
-            <li><a class="dropdown-item small" href="orders.php">Đơn hàng</a></li>
-            <li><hr class="dropdown-divider my-1"></li>
-            <li><a class="dropdown-item small text-danger" href="logout.php">Đăng xuất</a></li>
-          <?php endif; ?>
-        </ul>
-      </div>
-
-      <div class="dropdown">
-        <a class="text-decoration-none position-relative d-flex align-items-center" href="#" id="miniCartBtn" data-bs-toggle="dropdown" aria-expanded="false" style="gap:8px;">
-          <div style="width:36px;height:36px;border-radius:8px;background:#f6f8fb;display:flex;align-items:center;justify-content:center;color:#0b1220"><i class="bi bi-bag-fill"></i></div>
-          <span class="d-none d-md-inline small-muted">Giỏ hàng</span>
-          <span class="badge bg-danger rounded-pill" style="position:relative;top:-6px;left:-6px;font-size:12px;padding:4px 7px;"><?= (int)$cart_count ?></span>
-        </a>
-        <div class="dropdown-menu dropdown-menu-end p-2" aria-labelledby="miniCartBtn" style="min-width:320px;">
-          <?php if (empty($_SESSION['cart'])): ?>
-            <div class="small text-muted">Bạn chưa có sản phẩm nào trong giỏ.</div>
-            <div class="mt-2 d-grid gap-2">
-              <a href="sanpham.php" class="btn btn-primary btn-sm">Mua ngay</a>
-            </div>
-          <?php else: ?>
-            <div style="max-height:220px;overflow:auto" id="cartDropdownItems">
-              <?php $total=0; foreach($_SESSION['cart'] as $id=>$item):
-                $qty = isset($item['qty']) ? (int)$item['qty'] : (isset($item['sl']) ? (int)$item['sl'] : 1);
-                $price = isset($item['price']) ? (float)$item['price'] : (isset($item['gia']) ? (float)$item['gia'] : 0);
-                $name = $item['name'] ?? $item['ten'] ?? '';
-                $img = $item['img'] ?? $item['hinh'] ?? 'images/placeholder.jpg';
-                $img = preg_match('#^https?://#i', $img) ? $img : ltrim($img, '/');
-                $subtotal = $qty * $price; $total += $subtotal;
-              ?>
-                <div class="d-flex gap-2 align-items-center py-2">
-                  <img src="<?= esc($img) ?>" style="width:48px;height:48px;object-fit:cover;border-radius:6px" alt="<?= esc($name) ?>">
-                  <div class="flex-grow-1"><div class="small fw-semibold mb-1"><?= esc($name) ?></div><div class="small text-muted"><?= $qty ?> x <?= number_format($price,0,',','.') ?> ₫</div></div>
-                  <div class="small"><?= number_format($subtotal,0,',','.') ?> ₫</div>
-                </div>
-              <?php endforeach; ?>
-            </div>
-            <div class="d-flex justify-content-between align-items-center mt-2"><div class="text-muted small">Tạm tính</div><div class="fw-semibold" id="cartDropdownSubtotal"><?= number_format($total,0,',','.') ?> ₫</div></div>
-            <div class="mt-2 d-grid gap-2"><a href="cart.php" class="btn btn-outline-secondary btn-sm">Giỏ hàng</a><a href="checkout.php" class="btn btn-primary btn-sm">Thanh toán</a></div>
-          <?php endif; ?>
-        </div>
-      </div>
-
-      <button class="btn btn-light d-lg-none ms-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileMenu" aria-controls="mobileMenu">
-        <i class="bi bi-list"></i>
-      </button>
-    </div>
-  </div>
-</header>
-
-<!-- Mobile offcanvas menu -->
-<div class="offcanvas offcanvas-start" tabindex="-1" id="mobileMenu" aria-labelledby="mobileMenuLabel">
-  <div class="offcanvas-header">
-    <h5 id="mobileMenuLabel"><?= esc($site_name) ?></h5>
-    <button type="button" class="btn-close text-reset" data-bs-dismiss="offcanvas" aria-label="Đóng"></button>
-  </div>
-  <div class="offcanvas-body">
-    <form action="sanpham.php" method="get" class="mb-3 d-flex">
-      <input class="form-control me-2" name="q" placeholder="Tìm sản phẩm..." value="<?= esc($_GET['q'] ?? '') ?>">
-      <button class="btn btn-dark">Tìm</button>
-    </form>
-    <ul class="list-unstyled">
-      <li class="mb-2"><a href="index.php" class="text-decoration-none">Trang chủ</a></li>
-      <li class="mb-2"><a href="sanpham.php" class="text-decoration-none">Sản phẩm</a></li>
-      <?php foreach($cats as $c): ?>
-        <li class="mb-2 ps-2"><a href="category.php?slug=<?= urlencode($c['slug']) ?>" class="text-decoration-none"><?= esc($c['ten']) ?></a></li>
-      <?php endforeach; ?>
-      <li class="mb-2"><a href="about.php" class="text-decoration-none">Giới thiệu</a></li>
-      <li class="mb-2"><a href="contact.php" class="text-decoration-none">Liên hệ</a></li>
-    </ul>
-  </div>
-</div>
+  <?php require_once __DIR__ . '/inc/header.php'; ?>
 
 <!-- PAGE -->
 <main class="page-wrap">
   <div class="container container-main">
     <div class="page-head">
       <div>
-        <h3>Sản phẩm</h3>
+        <h3><?= $pageHeading ?></h3>
         <?php if ($q): ?><div class="small-muted">Kết quả tìm kiếm: "<?= esc($q) ?>"</div><?php endif; ?>
+        <?php if ($slugCategory !== null): ?><div class="small-muted">Danh mục: <?= esc($slugCategoryName) ?></div><?php endif; ?>
+
+        <!-- show filtered count / total products -->
+        <div class="small-muted mt-1">Hiển thị <strong><?= number_format($total_items,0,',','.') ?></strong> / <?= number_format($total_all,0,',','.') ?> sản phẩm</div>
       </div>
       <div class="d-flex gap-2 align-items-center">
         <a href="index.php" class="btn btn-link p-0">&larr; Trang chủ</a>
@@ -312,28 +410,71 @@ $red = '#dc2626';
     </div>
 
     <div class="row g-2">
-      <!-- SIDEBAR -->
+      <!-- SIDEBAR FILTER -->
       <aside class="col-lg-3 d-none d-lg-block">
         <div class="filter-card">
-          <form method="get" action="sanpham.php" class="mb-2">
-            <label class="form-label small">Tìm kiếm</label>
-            <input name="q" value="<?= esc($q) ?>" class="form-control form-control-sm mb-2" placeholder="Tên, mã...">
+          <form id="filterForm" method="get" action="sanpham.php">
+            <!-- preserve q and slug when filtering -->
+            <input type="hidden" name="q" value="<?= esc($q) ?>">
+            <?php if ($slug !== ''): ?><input type="hidden" name="slug" value="<?= esc($slug) ?>"><?php endif; ?>
 
-            <label class="form-label small">Danh mục</label>
-            <select name="cat" class="form-select form-select-sm mb-2">
-              <option value="0">Tất cả</option>
-              <?php foreach ($cats as $c): ?>
-                <option value="<?= (int)$c['id_danh_muc'] ?>" <?= $cat === (int)$c['id_danh_muc'] ? 'selected' : '' ?>><?= esc($c['ten']) ?></option>
-              <?php endforeach; ?>
-            </select>
+            <div class="filter-title">Bộ lọc</div>
 
-            <div class="d-grid">
-              <button class="btn btn-primary btn-sm">Lọc</button>
+            <div class="filter-section">
+              <h6>Danh mục sản phẩm</h6>
+              <ul class="cat-list">
+                <li>
+                  <label style="cursor:pointer">
+                    <input type="radio" name="cat" value="0" <?= $cat===0 ? 'checked' : '' ?>> <strong>Tất cả</strong>
+                  </label>
+                </li>
+                <?php foreach ($cats as $c): ?>
+                  <li>
+                    <label style="cursor:pointer">
+                      <input type="radio" name="cat" value="<?= (int)$c['id_danh_muc'] ?>" <?= $cat === (int)$c['id_danh_muc'] ? 'checked' : '' ?>>
+                      <?= esc($c['ten']) ?>
+                    </label>
+                  </li>
+                <?php endforeach; ?>
+              </ul>
+            </div>
+
+            <!-- === CENTERED KNOB PRICE SLIDER === -->
+            <div class="price-box">
+              <div class="price-title">Khoảng giá</div>
+
+              <div class="slider-container" aria-hidden="false">
+                <div class="slider-track"></div>
+                <div id="slider-range" class="slider-range" style="left:0;right:0;"></div>
+
+                <div class="slider-value" id="sliderValueMin"><?= number_format($price_min,0,',','.') ?>đ</div>
+                <div class="slider-value" id="sliderValueMax"><?= number_format($price_max,0,',','.') ?>đ</div>
+
+                <input id="rangeMin" type="range" min="0" max="<?= $maxPrice ?>" value="<?= $price_min ?>" step="10000">
+                <input id="rangeMax" type="range" min="0" max="<?= $maxPrice ?>" value="<?= $price_max ?>" step="10000">
+              </div>
+
+              <div class="price-labels">
+                <span id="labelMin"><?= number_format($price_min,0,',','.') ?> ₫</span>
+                <span id="labelMax"><?= number_format($price_max,0,',','.') ?> ₫</span>
+              </div>
+
+              <input type="hidden" id="inputPriceMin" name="price_min" value="<?= (int)$price_min ?>">
+              <input type="hidden" id="inputPriceMax" name="price_max" value="<?= (int)$price_max ?>">
+            </div>
+            <!-- === END PRICE BOX === -->
+
+            <div class="mt-3 d-flex gap-2">
+              <button type="submit" class="btn btn-primary w-100">Áp dụng</button>
+              <a href="sanpham.php" class="btn btn-outline-secondary w-100">Xóa</a>
             </div>
           </form>
 
-          <hr>
-          <div class="small-muted">Hiển thị <strong><?= count($products) ?></strong> / <?= $total_items ?> sản phẩm</div>
+          <!-- visible info under filters about counts -->
+          <div class="mt-3 small-muted" style="font-size:13px">
+            Kết quả: <strong><?= number_format($total_items,0,',','.') ?></strong> sản phẩm được lọc<br>
+            Tổng sản phẩm cửa hàng: <strong><?= number_format($total_all,0,',','.') ?></strong>
+          </div>
         </div>
       </aside>
 
@@ -344,12 +485,13 @@ $red = '#dc2626';
           <button type="button" class="btn-close text-reset" data-bs-dismiss="offcanvas" aria-label="Close"></button>
         </div>
         <div class="offcanvas-body">
+          <!-- simplified mobile form -->
           <form method="get" action="sanpham.php">
-            <div class="mb-2">
+            <div class="mb-3">
               <label class="form-label small">Tìm kiếm</label>
               <input name="q" value="<?= esc($q) ?>" class="form-control form-control-sm mb-2" placeholder="Tên, mã...">
             </div>
-            <div class="mb-2">
+            <div class="mb-3">
               <label class="form-label small">Danh mục</label>
               <select name="cat" class="form-select form-select-sm mb-2">
                 <option value="0">Tất cả</option>
@@ -358,8 +500,17 @@ $red = '#dc2626';
                 <?php endforeach; ?>
               </select>
             </div>
+
+            <div class="mb-3">
+              <label class="form-label small">Khoảng giá</label>
+              <div class="d-flex gap-2">
+                <input type="number" name="price_min" class="form-control form-control-sm" placeholder="Từ" value="<?= (int)$price_min ?>">
+                <input type="number" name="price_max" class="form-control form-control-sm" placeholder="Đến" value="<?= (int)$price_max ?>">
+              </div>
+            </div>
+
             <div class="d-grid">
-              <button class="btn btn-primary btn-sm">Lọc</button>
+              <button class="btn btn-primary">Áp dụng</button>
             </div>
           </form>
         </div>
@@ -376,43 +527,61 @@ $red = '#dc2626';
             $pid = (int)$p['id_san_pham'];
             $img = getProductImage($conn, $pid);
             $name = $p['ten'];
-            $price = (float)$p['gia'];
+            $priceVal = (float)$p['gia'];
             $old = !empty($p['gia_cu']) ? (float)$p['gia_cu'] : 0;
             $detailUrl = 'sanpham_chitiet.php?id=' . $pid;
-            $stock = (int)($p['so_luong'] ?? 0);
-            $discount = ($old && $old > $price) ? (int)round((($old - $price)/$old)*100) : 0;
-            $short = mb_substr(strip_tags($p['mo_ta'] ?? ''),0,100);
+            $discount = ($old && $old > $priceVal) ? (int)round((($old - $priceVal)/$old)*100) : 0;
+
+            // payload cho quickview
+            $payload = [
+              'id' => $pid,
+              'name' => $p['ten'],
+              'gia_raw' => $p['gia'],
+              'price' => $p['gia'],
+              'mo_ta' => mb_substr(strip_tags($p['mo_ta'] ?? ''),0,400),
+              'img' => $img,
+              'stock' => (int)$p['so_luong'],
+              'thumbs' => [$img],
+            ];
+            $payloadJson = htmlspecialchars(json_encode($payload, JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8');
           ?>
-          <article class="card-product position-relative" aria-label="<?= esc($name) ?>">
-            <?php if ($discount>0): ?><div class="badge-discount">-<?= $discount ?>%</div><?php endif; ?>
-            <div class="card-media">
-              <a href="<?= esc($detailUrl) ?>" class="d-block" style="width:100%;height:100%;">
-                <img src="<?= esc($img) ?>" alt="<?= esc($name) ?>">
-              </a>
-            </div>
+          <article class="card-pro" aria-label="<?= esc($name) ?>">
+            <?php if ($discount > 0): ?>
+              <div style="position:absolute;left:12px;top:12px;background:#ef4444;color:#fff;padding:6px 8px;border-radius:8px;font-weight:800;font-size:12px;">-<?= $discount ?>%</div>
+            <?php endif; ?>
 
-            <div class="card-body">
-              <?php if (!empty($p['danh_muc_ten'])): ?><div class="small-muted"><?= esc($p['danh_muc_ten']) ?></div><?php endif; ?>
-              <a href="<?= esc($detailUrl) ?>" class="text-decoration-none"><div class="product-title"><?= esc($name) ?></div></a>
+            <!-- CLICK ẢNH -> CHI TIẾT (không mở QuickView) -->
+            <a href="<?= esc($detailUrl) ?>" class="card-media" style="text-decoration:none;">
+              <img src="<?= esc($img) ?>" alt="<?= esc($name) ?>" style="max-height:160px;object-fit:contain">
+            </a>
 
-              <div class="product-meta">
-                <div>
-                  <div class="price-current"><?= price($price) ?></div>
-                  <?php if ($old && $old > $price): ?><div class="price-old"><?= number_format($old,0,',','.') ?> ₫</div><?php endif; ?>
+            <div class="card-body-pro">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                <div style="flex:1">
+                  <div style="font-weight:800;font-size:14px"><?= esc($name) ?></div>
+                  <div style="color:var(--muted);font-size:12px; margin-top:6px; min-height:36px"><?= esc(mb_substr(strip_tags($p['mo_ta'] ?? ''),0,80)) ?></div>
                 </div>
-                <div class="small-muted">Còn <?= $stock ?> sp</div>
+                <div style="text-align:right;margin-left:12px">
+                  <div style="color:#ef4444;font-weight:900"><?= price($priceVal) ?></div>
+                  <?php if ($old && $old > $priceVal): ?><div style="text-decoration:line-through;color:#9aa6b2;font-size:12px"><?= number_format($old,0,',','.') ?> ₫</div><?php endif; ?>
+                </div>
               </div>
 
-              <div class="small-muted"><?= esc($short) ?></div>
+              <div style="margin-top:8px;display:flex;gap:8px">
+                <!-- Thêm => mở QuickView (giống index) -->
+                <button type="button"
+                  class="btn btn-sm btn-primary"
+                  onclick='openQuickViewFromPayload(<?= $payloadJson ?>)'>
+                  <i class="bi bi-cart-plus"></i> Thêm
+                </button>
 
-              <div class="product-ctas">
-                <a href="<?= esc($detailUrl) ?>" class="btn-view" aria-label="Xem <?= esc($name) ?>"><i class="bi bi-eye"></i> Xem</a>
+                <!-- Xem -> trang chi tiết -->
+                <a href="<?= esc($detailUrl) ?>" class="btn btn-sm btn-outline-secondary">Xem</a>
 
-                <form method="post" action="cart.php?action=add" class="m-0 w-100" onsubmit="return ajaxAddToCart(event, this)" aria-label="Thêm <?= esc($name) ?> vào giỏ">
-                  <input type="hidden" name="id" value="<?= $pid ?>">
-                  <input type="hidden" name="qty" value="1">
-                  <button type="submit" class="btn-buy"><i class="bi bi-cart-plus"></i> Thêm</button>
-                </form>
+                <!-- Xem nhanh (mở QuickView modal) -->
+                <button type="button" class="btn btn-sm btn-light" onclick='openQuickViewFromPayload(<?= $payloadJson ?>)' title="Xem nhanh">
+                  <i class="bi bi-eye"></i>
+                </button>
               </div>
             </div>
           </article>
@@ -441,6 +610,231 @@ $red = '#dc2626';
   </div>
 </main>
 
+<!-- QUICKVIEW modal -->
+<style>
+.qv-price-box{
+  border:1px solid #eee;
+  border-radius:12px;
+  padding:16px 20px;
+  background:#fafafa;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+.qv-size button{
+  border-radius:10px;
+  min-width:52px;
+  font-weight:700;
+}
+.qv-qty-group input{
+  width:60px;
+  text-align:center;
+}
+.qv-qty-group button{
+  width:40px;
+}
+.qv-add{
+  background:linear-gradient(90deg,#ef4444,#f97316);
+  border:none;
+  color:#fff;
+  font-weight:800;
+  border-radius:12px;
+}
+.qv-buy{
+  border-radius:12px;
+  border:2px solid #e5e7eb;
+  font-weight:700;
+}
+.qv-share i{
+  font-size:20px;
+  color:#2563eb;
+  margin-right:12px;
+  cursor:pointer;
+}
+</style>
+
+
+<!-- QUICKVIEW MODAL ĐẸP Y HÌNH -->
+<div class="modal fade" id="quickViewModal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content p-3 rounded-4">
+      <div class="modal-body">
+        <div class="row g-4">
+
+          <!-- ẢNH TRÁI -->
+          <div class="col-md-6 text-center">
+            <img id="qv-main-img" class="img-fluid rounded-4 mb-3" style="max-height:520px;object-fit:contain">
+            <div class="d-flex justify-content-center gap-2" id="qv-thumbs"></div>
+          </div>
+
+          <!-- THÔNG TIN PHẢI -->
+          <div class="col-md-6">
+            <h3 id="qv-title" class="fw-bold mb-2"></h3>
+
+            <div class="mb-2 text-muted">
+              Mã sản phẩm: <strong id="qv-code"></strong>
+              <span id="qv-stock" class="text-success fw-bold ms-2"></span>
+            </div>
+
+            <!-- GIÁ -->
+            <div class="qv-price-box mb-3">
+              <div class="text-muted">Giá:</div>
+              <div id="qv-price" class="fs-4 fw-bold text-danger"></div>
+            </div>
+
+            <div id="qv-short-desc" class="text-muted mb-3"></div>
+
+            <hr>
+
+            <!-- SIZE -->
+            <div class="fw-bold mb-2">Kích thước:</div>
+            <div id="qv-sizes" class="qv-size mb-3"></div>
+
+            <!-- SỐ LƯỢNG -->
+            <div class="d-flex align-items-center gap-3 mb-3">
+              <div class="qv-qty-group d-flex align-items-center gap-2">
+                <button type="button" id="qv-dec" class="btn btn-outline-secondary">−</button>
+                <input id="qv-qty" type="number" value="1" class="form-control">
+                <button type="button" id="qv-inc" class="btn btn-outline-secondary">+</button>
+              </div>
+              <span class="text-muted">Giao hàng 1–3 ngày • Đổi trả 7 ngày</span>
+            </div>
+
+            <!-- FORM ADD -->
+            <form id="qv-addform" method="post" action="cart.php">
+              <input type="hidden" name="action" value="add">
+              <input type="hidden" name="id" id="qv-id">
+              <input type="hidden" name="qty" id="qv-id-qty" value="1">
+              <input type="hidden" name="size" id="qv-size">
+
+              <button id="qv-addbtn" class="qv-add w-100 p-3 mb-3">
+                <i class="bi bi-cart-plus"></i> THÊM VÀO GIỎ
+              </button>
+            </form>
+
+            <button id="qv-buy" class="qv-buy w-100 p-3 mb-3">
+              MUA NGAY
+            </button>
+
+            <!-- SHARE -->
+            <div class="qv-share mt-3">
+              Chia sẻ:
+              <i class="bi bi-facebook"></i>
+              <i class="bi bi-messenger"></i>
+              <i class="bi bi-twitter"></i>
+              <i class="bi bi-pinterest"></i>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+const qv_title = document.getElementById('qv-title');
+const qv_price = document.getElementById('qv-price');
+const qv_main_img = document.getElementById('qv-main-img');
+const qv_short_desc = document.getElementById('qv-short-desc');
+const qv_id = document.getElementById('qv-id');
+const qv_qty = document.getElementById('qv-qty');
+const qv_id_qty = document.getElementById('qv-id-qty');
+const qv_size = document.getElementById('qv-size');
+const qv_thumbs = document.getElementById('qv-thumbs');
+const qv_sizes = document.getElementById('qv-sizes');
+const qv_addform = document.getElementById('qv-addform');
+const qv_addbtn = document.getElementById('qv-addbtn');
+const qv_buy = document.getElementById('qv-buy');
+const qv_code = document.getElementById('qv-code');
+const qv_stock = document.getElementById('qv-stock');
+const quickViewModal = document.getElementById('quickViewModal');
+
+function openQuickViewFromPayload(data){
+  qv_title.textContent = data.name;
+  qv_price.textContent = new Intl.NumberFormat('vi-VN').format(data.price) + ' ₫';
+  qv_main_img.src = data.img;
+  qv_short_desc.textContent = data.mo_ta;
+  qv_id.value = data.id;
+  qv_qty.value = 1;
+  qv_id_qty.value = 1;
+  qv_size.value = '';
+
+  qv_code.textContent = '#' + data.id;
+  qv_stock.textContent = data.stock > 0 ? 'Còn hàng' : 'Hết hàng';
+
+  qv_thumbs.innerHTML = '';
+  (data.thumbs || [data.img]).forEach(img=>{
+    const im = document.createElement('img');
+    im.src = img;
+    im.style.width='70px';
+    im.style.height='70px';
+    im.style.objectFit='cover';
+    im.className='border rounded';
+    im.onclick = ()=> qv_main_img.src = img;
+    qv_thumbs.appendChild(im);
+  });
+
+  qv_sizes.innerHTML = '';
+  ['S','M','L','XL'].forEach(s=>{
+    const b = document.createElement('button');
+    b.className = 'btn btn-outline-secondary me-2';
+    b.textContent = s;
+    b.onclick = ()=>{
+      document.querySelectorAll('#qv-sizes button').forEach(x=>x.classList.remove('btn-danger'));
+      b.classList.add('btn-danger');
+      qv_size.value = s;
+    };
+    qv_sizes.appendChild(b);
+  });
+
+  new bootstrap.Modal(quickViewModal).show();
+}
+
+document.getElementById('qv-inc').onclick = ()=>{ qv_qty.value++; qv_id_qty.value = qv_qty.value; };
+document.getElementById('qv-dec').onclick = ()=>{ qv_qty.value = Math.max(1, qv_qty.value-1); qv_id_qty.value = qv_qty.value; };
+
+qv_addform.onsubmit = async e=>{
+  e.preventDefault();
+  const fd = new FormData(qv_addform);
+  fd.append('ajax','1');
+  const res = await fetch('cart.php?action=add',{method:'POST',body:fd});
+  const json = await res.json();
+
+  if(json.success){
+    bootstrap.Modal.getInstance(quickViewModal).hide();
+    alert('✅ Đã thêm vào giỏ');
+  }
+};
+
+qv_buy.onclick = ()=>{
+  qv_addform.requestSubmit();
+  setTimeout(()=>location.href='checkout.php',400);
+};
+</script>
+
+
+
+
+
+<!-- mini-cart tap (slide in) -->
+<div id="miniCartTap" class="mini-cart-tap" aria-hidden="true" role="status" aria-live="polite">
+  <div class="mc-body">
+    <div class="d-flex align-items-start gap-2">
+      <img id="mc-thumb" src="images/placeholder.jpg" style="width:64px;height:64px;object-fit:cover;border-radius:8px">
+      <div style="flex:1">
+        <div id="mc-title" style="font-weight:800"></div>
+        <div id="mc-sub" class="small text-muted"></div>
+      </div>
+    </div>
+  </div>
+  <div class="mc-footer">
+    <a href="cart.php" class="btn btn-primary btn-sm w-100">Xem giỏ hàng</a>
+    <button id="mc-close" class="btn btn-outline-secondary btn-sm w-100">Đóng</button>
+  </div>
+</div>
+
 <footer class="bg-white py-3 mt-4 border-top">
   <div class="container container-main text-center small text-muted"><?= esc($site_name) ?> — © <?= date('Y') ?></div>
 </footer>
@@ -448,60 +842,258 @@ $red = '#dc2626';
 <!-- scripts -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-// AJAX add-to-cart helper (expects cart.php to return JSON { success:true, cart:{ items_count, subtotal, items: [...] } } )
+/* Improved centered-thumb dual-range slider */
+(function(){
+  const minR = document.getElementById("rangeMin");
+  const maxR = document.getElementById("rangeMax");
+  const sliderRange = document.getElementById("slider-range");
+  const vMin = document.getElementById("sliderValueMin");
+  const vMax = document.getElementById("sliderValueMax");
+  const labelMin = document.getElementById("labelMin");
+  const labelMax = document.getElementById("labelMax");
+  const inputMin = document.getElementById("inputPriceMin");
+  const inputMax = document.getElementById("inputPriceMax");
+
+  if (!minR || !maxR || !sliderRange) return;
+  const maxValue = parseInt(minR.max || '3000000', 10);
+
+  function format(v){ return v.toLocaleString('vi-VN') + 'đ'; }
+  function formatLabel(v){ return v.toLocaleString('vi-VN') + ' ₫'; }
+
+  function update(){
+    let a = parseInt(minR.value || 0, 10);
+    let b = parseInt(maxR.value || maxValue, 10);
+
+    if (isNaN(a)) a = 0;
+    if (isNaN(b)) b = maxValue;
+
+    // if thumbs cross, swap visually but keep the input values (we set inputs when submitting)
+    if (a > b) {
+      const t = a; a = b; b = t;
+    }
+
+    const leftPct = (a / maxValue) * 100;
+    const rightPct = 100 - (b / maxValue) * 100;
+
+    sliderRange.style.left = leftPct + "%";
+    sliderRange.style.right = rightPct + "%";
+
+    vMin.textContent = format(a);
+    vMax.textContent = format(b);
+
+    // position float labels above thumb centers (clamped)
+    vMin.style.left = Math.max(6, Math.min(94, leftPct)) + "%";
+    vMax.style.left = Math.max(6, Math.min(94, (100 - rightPct))) + "%";
+
+    if (labelMin) labelMin.textContent = formatLabel(a);
+    if (labelMax) labelMax.textContent = formatLabel(b);
+
+    if (inputMin) inputMin.value = a;
+    if (inputMax) inputMax.value = b;
+  }
+
+  // enable pointer events on range inputs via event listeners
+  minR.addEventListener('input', update);
+  maxR.addEventListener('input', update);
+
+  // init
+  update();
+})();
+
+// AJAX add-to-cart helper (keeps badge update + shows toast + mini-cart tap)
 async function ajaxAddToCart(evt, form){
   try {
-    evt.preventDefault();
+    if (evt) evt.preventDefault();
     const fd = new FormData(form);
     fd.append('ajax','1');
     const actionUrl = form.getAttribute('action') || 'cart.php';
     const res = await fetch(actionUrl, { method:'POST', body:fd, credentials:'same-origin', headers: {'X-Requested-With':'XMLHttpRequest'} });
-    if (!res.ok) { form.submit(); return false; }
-    const data = await res.json();
-    if (data && data.success) {
-      const btn = form.querySelector('button[type="submit"]');
-      if (btn) {
-        const old = btn.innerHTML;
-        btn.innerHTML = '<i class="bi bi-check-lg"></i> Đã thêm';
-        btn.disabled = true;
-        setTimeout(()=>{ btn.innerHTML = old; btn.disabled = false; }, 900);
-      }
-      // update cart badges/subtotal
-      if (data.cart && typeof data.cart.items_count !== 'undefined') {
-        document.querySelectorAll('.badge.bg-danger').forEach(b => b.textContent = data.cart.items_count);
-      }
-      if (data.cart && typeof data.cart.subtotal !== 'undefined') {
-        const elem = document.getElementById('cartDropdownSubtotal');
-        if (elem) elem.textContent = Number(data.cart.subtotal).toLocaleString('vi-VN') + ' ₫';
-      }
-      // update dropdown items if returned
-      if (data.cart && Array.isArray(data.cart.items) && document.getElementById('cartDropdownItems')) {
-        const wrap = document.getElementById('cartDropdownItems');
-        let html = '';
-        data.cart.items.forEach(it => {
-          const img = it.img ? it.img : 'images/placeholder.jpg';
-          const name = it.name ? it.name : ('Sản phẩm #' + (it.id ?? ''));
-          const qty = it.qty ?? 1;
-          const price = Number(it.price ?? 0);
-          html += `<div class="d-flex gap-2 align-items-center py-2">
-              <img src="${img}" style="width:48px;height:48px;object-fit:cover;border-radius:6px" alt="">
-              <div class="flex-grow-1"><div class="small fw-semibold mb-1">${name}</div><div class="small text-muted">${qty} x ${price.toLocaleString('vi-VN')} ₫</div></div>
-              <div class="small">${(qty * price).toLocaleString('vi-VN')} ₫</div>
-            </div>`;
-        });
-        wrap.innerHTML = html;
-      }
+    if (!res.ok) {
+      if (evt) form.submit();
       return false;
-    } else {
-      form.submit();
-      return true;
     }
+    const data = await res.json();
+    if (!data || !data.success) {
+      if (evt) form.submit();
+      return false;
+    }
+
+    /* BUTTON FEEDBACK */
+    const btn = form.querySelector('button[type="submit"],button');
+    if (btn) {
+      const old = btn.innerHTML;
+      btn.innerHTML = '<i class="bi bi-check-lg"></i> Đã thêm';
+      btn.disabled = true;
+      setTimeout(()=>{ btn.innerHTML = old; btn.disabled = false; }, 900);
+    }
+
+    /* UPDATE BADGE */
+    if (data.cart && typeof data.cart.items_count !== 'undefined') {
+      document.querySelectorAll('#cartBadge').forEach(b => b.textContent = data.cart.items_count);
+    }
+
+    /* MINI CART TAP */
+    try {
+      const tap = document.getElementById('miniCartTap');
+      const thumb = document.getElementById('mc-thumb');
+      const title = document.getElementById('mc-title');
+      const sub = document.getElementById('mc-sub');
+
+      if (tap) {
+        let img = 'images/placeholder.jpg';
+        let name = 'Sản phẩm vừa thêm';
+        let priceText = '';
+
+        if (data.last_added) {
+          img = data.last_added.img || img;
+          name = data.last_added.name || name;
+          if (data.last_added.price) priceText = new Intl.NumberFormat('vi-VN').format(data.last_added.price) + ' ₫';
+        } else {
+          const card = form.closest('.card-pro');
+          if (card) {
+            img = card.querySelector('img')?.src || img;
+            name = card.querySelector('.card-body-pro div[style*="font-weight:800"]')?.textContent || name;
+            priceText = card.querySelector('div[style*="text-align:right"]')?.textContent || '';
+          }
+        }
+
+        if (thumb) thumb.src = img;
+        if (title) title.textContent = name;
+        if (sub) sub.textContent = priceText;
+
+        tap.classList.add('show');
+        setTimeout(()=>{ tap.classList.remove('show'); }, 3200);
+      }
+    } catch(e) { console.error(e); }
+
+    /* small toast */
+    try {
+      const tmp = document.createElement('div');
+      tmp.style.position = 'fixed';
+      tmp.style.right = '18px';
+      tmp.style.bottom = '18px';
+      tmp.style.zIndex = 2050;
+      tmp.innerHTML = '<div class="toast align-items-center text-bg-success border-0 show" role="status" aria-live="polite" aria-atomic="true"><div class="d-flex"><div class="toast-body">Đã thêm vào giỏ hàng</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div></div>';
+      document.body.appendChild(tmp);
+      setTimeout(()=> { try{ document.body.removeChild(tmp); }catch(e){} }, 2000);
+    } catch(e){}
+
+    return false;
   } catch (err) {
     console.error(err);
-    form.submit();
+    if (evt) form.submit();
     return true;
   }
 }
+
+/* ====== QUICKVIEW: KHỞI TẠO BIẾN DOM VÀ HÀM MỞ ====== */
+const qv_title = document.getElementById('qv-title');
+const qv_price = document.getElementById('qv-price');
+const qv_main_img = document.getElementById('qv-main-img');
+const qv_short_desc = document.getElementById('qv-short-desc');
+const qv_id = document.getElementById('qv-id');
+const qv_qty = document.getElementById('qv-qty');
+const qv_id_qty = document.getElementById('qv-id-qty');
+const qv_size = document.getElementById('qv-size');
+const qv_thumbs = document.getElementById('qv-thumbs');
+const qv_sizes = document.getElementById('qv-sizes');
+const qv_addform = document.getElementById('qv-addform');
+const qv_addbtn = document.getElementById('qv-addbtn');
+const qv_buy = document.getElementById('qv-buy');
+const quickViewModal = document.getElementById('quickViewModal');
+
+function openQuickViewFromPayload(data){
+  try {
+    if (!data) return;
+    qv_title.textContent = data.name || '';
+    qv_price.textContent = new Intl.NumberFormat('vi-VN').format(data.price || data.gia_raw || 0) + ' ₫';
+    qv_main_img.src = data.img || 'images/placeholder.jpg';
+    qv_short_desc.textContent = data.mo_ta || '';
+    qv_id.value = data.id || '';
+    qv_qty.value = 1;
+    qv_id_qty.value = 1;
+    qv_size.value = '';
+
+    // thumbs
+    qv_thumbs.innerHTML = '';
+    (data.thumbs || [data.img]).forEach((t,i)=>{
+      const im = document.createElement('img');
+      im.src = t;
+      im.style.width='64px';
+      im.style.height='64px';
+      im.style.objectFit='cover';
+      im.style.cursor='pointer';
+      im.className = 'me-2';
+      if(i===0) im.classList.add('border','border-danger');
+      im.onclick = ()=>{ qv_main_img.src = t; };
+      qv_thumbs.appendChild(im);
+    });
+
+    // sizes (demo)
+    qv_sizes.innerHTML = '';
+    (data.sizes || ['S','M','L','XL']).forEach(s=>{
+      const b = document.createElement('button');
+      b.type='button';
+      b.className='btn btn-outline-secondary me-2 mb-2';
+      b.textContent=s;
+      b.onclick = ()=>{
+        document.querySelectorAll('#qv-sizes button').forEach(x=>x.classList.remove('btn-danger'));
+        b.classList.add('btn-danger');
+        qv_size.value = s;
+      };
+      qv_sizes.appendChild(b);
+    });
+
+    new bootstrap.Modal(quickViewModal).show();
+  } catch(e){
+    console.error('openQuickView error', e);
+  }
+}
+
+/* qty buttons */
+document.getElementById('qv-inc').onclick = ()=>{ qv_qty.value = +qv_qty.value +1; qv_id_qty.value = qv_qty.value; };
+document.getElementById('qv-dec').onclick = ()=>{ qv_qty.value = Math.max(1,+qv_qty.value -1); qv_id_qty.value = qv_qty.value; };
+
+/* AJAX add to cart (QuickView) */
+qv_addform.onsubmit = async e=>{
+  e.preventDefault();
+  const fd = new FormData(qv_addform);
+  fd.append('ajax','1');
+
+  qv_addbtn.disabled = true;
+  try {
+    const res = await fetch('cart.php?action=add',{method:'POST',body:fd});
+    const json = await res.json();
+    qv_addbtn.disabled = false;
+    if (json && json.success) {
+      document.querySelectorAll('#cartBadge').forEach(b=>b.textContent=json.cart.items_count);
+      bootstrap.Modal.getInstance(quickViewModal)?.hide();
+      // show small toast (or use alert as fallback)
+      try {
+        const t = document.createElement('div');
+        t.style.position='fixed'; t.style.right='18px'; t.style.bottom='18px'; t.style.zIndex=2050;
+        t.innerHTML = '<div class="toast align-items-center text-bg-success border-0 show" role="status" aria-live="polite" aria-atomic="true"><div class="d-flex"><div class="toast-body">Đã thêm vào giỏ hàng</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div></div>';
+        document.body.appendChild(t);
+        setTimeout(()=>{ try{ document.body.removeChild(t); }catch(e){} },1600);
+      } catch(e){ alert('✅ Đã thêm vào giỏ'); }
+    } else {
+      if (!json) alert('Lỗi server');
+    }
+  } catch(err){
+    console.error(err);
+    qv_addbtn.disabled = false;
+    alert('Lỗi mạng, thử lại');
+  }
+};
+
+/* buy now */
+qv_buy.onclick = ()=>{
+  qv_addform.requestSubmit();
+  setTimeout(()=>location.href='checkout.php',400);
+};
+
+/* allow closing mini cart manually */
+document.getElementById('mc-close')?.addEventListener('click', function(){ document.getElementById('miniCartTap').classList.remove('show'); });
 </script>
 </body>
 </html>
