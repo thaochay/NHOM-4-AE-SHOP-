@@ -1,0 +1,263 @@
+<?php
+if (session_status() === PHP_SESSION_NONE) session_start();
+
+/* CART COUNT – GIỮ NGUYÊN LOGIC */
+if (!isset($cart_count)) {
+  $cart_count = 0;
+  if (!empty($_SESSION['cart'])) {
+    foreach ($_SESSION['cart'] as $it) {
+      $cart_count += isset($it['qty']) ? (int)$it['qty'] : 1;
+    }
+  }
+}
+
+/* ===== WISHLIST COUNT ===== */
+$wishlist_count = 0;
+if (!empty($_SESSION['user']['id_nguoi_dung'])) {
+  try {
+    $stmt = $conn->prepare("
+      SELECT COUNT(*) 
+      FROM wishlist 
+      WHERE id_nguoi_dung = ?
+    ");
+    $stmt->execute([(int)$_SESSION['user']['id_nguoi_dung']]);
+    $wishlist_count = (int)$stmt->fetchColumn();
+  } catch (Exception $e) {
+    $wishlist_count = 0;
+  }
+}
+/* CATEGORY MENU – GIỮ NGUYÊN */
+if (!isset($catsMenu)) {
+  try {
+    $catsMenu = $conn
+      ->query("SELECT * FROM danh_muc WHERE trang_thai=1 ORDER BY thu_tu ASC")
+      ->fetchAll(PDO::FETCH_ASSOC);
+  } catch (Exception $e) {
+    $catsMenu = [];
+  }
+}
+
+/* ESC – GIỮ NGUYÊN */
+if (!function_exists('esc')) {
+  function esc($v){ return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
+}
+?>
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title><?= esc(function_exists('site_name') ? site_name($conn) : 'AE Shop') ?></title>
+
+<!-- ✅ BẮT BUỘC: BOOTSTRAP CSS -->
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+<!-- ✅ BẮT BUỘC: BOOTSTRAP ICONS -->
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+
+<!-- (nếu có CSS riêng thì giữ) -->
+<link rel="stylesheet" href="/ae_shop/assets/css/style.css">
+
+<!-- ========== HEADER CSS (GIỮ NGUYÊN CỦA BẠN) ========== -->
+<style>
+.ae-header {
+  background:#fff;
+  border-bottom:1px solid #eef3f8;
+  position:sticky;
+  top:0;
+  z-index:1050;
+}
+
+.brand {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  text-decoration:none;
+  color:inherit;
+}
+
+.ae-logo-mark {
+  width:46px;
+  height:46px;
+  border-radius:10px;
+  background:#0b7bdc;
+  color:#fff;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:800;
+}
+
+.nav-center {
+  display:flex;
+  gap:8px;
+  flex:1;
+  justify-content:center;
+}
+
+.nav-center .nav-link {
+  color:#333;
+  padding:8px 12px;
+  border-radius:8px;
+  font-weight:600;
+  text-decoration:none;
+}
+
+.nav-center .nav-link:hover {
+  background:rgba(11,123,220,0.06);
+  color:#0b7bdc;
+}
+
+.icon-box {
+  width:40px;
+  height:40px;
+  border-radius:8px;
+  background:#f6f8fb;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:#0b1220;
+}
+
+#cartBadge {
+  position:relative;
+  top:-10px;
+  left:-8px;
+}
+
+@media (max-width:991px){
+  .nav-center{ display:none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ========== HEADER HTML (GIỮ NGUYÊN 100%) ========== -->
+<header class="ae-header">
+  <div class="container d-flex align-items-center gap-3 py-2">
+
+    <!-- LOGO -->
+    <a class="brand" href="index.php">
+      <div class="ae-logo-mark">AE</div>
+      <div class="d-none d-md-block">
+        <div class="fw-bold"><?= esc(function_exists('site_name') ? site_name($conn) : 'AE Shop') ?></div>
+        <div class="small text-muted">Thời trang nam cao cấp</div>
+      </div>
+    </a>
+
+    <!-- MENU CENTER -->
+    <nav class="nav-center d-none d-lg-flex">
+      <a class="nav-link" href="index.php">Trang chủ</a>
+
+      <div class="nav-item dropdown">
+        <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">Sản Phẩm</a>
+        <ul class="dropdown-menu p-2">
+          <?php if (!empty($catsMenu)): foreach($catsMenu as $c): ?>
+            <li>
+              <a class="dropdown-item" href="sanpham.php?slug=<?= urlencode($c['slug']) ?>">
+                <?= esc($c['ten']) ?>
+              </a>
+            </li>
+          <?php endforeach; else: ?>
+            <li><span class="dropdown-item text-muted">Chưa có danh mục</span></li>
+          <?php endif; ?>
+          <li><hr class="dropdown-divider"></li>
+          <li><a class="dropdown-item text-muted" href="sanpham.php">Xem tất cả</a></li>
+        </ul>
+      </div>
+
+      <a class="nav-link" href="about.php">Giới thiệu</a>
+      <a class="nav-link" href="contact.php">Liên hệ</a>
+    </nav>
+
+    <!-- RIGHT ICONS -->
+    <div class="ms-auto d-flex align-items-center gap-2">
+
+      <!-- SEARCH -->
+      <form class="d-none d-lg-flex" action="sanpham.php" method="get">
+        <div class="input-group input-group-sm shadow-sm">
+          <input name="q" class="form-control search-input" placeholder="Tìm sản phẩm...">
+          <button class="btn btn-dark btn-sm"><i class="bi bi-search"></i></button>
+        </div>
+      </form>
+
+      <!-- USER -->
+      <div class="dropdown">
+        <a class="text-decoration-none d-flex align-items-center" href="#" data-bs-toggle="dropdown">
+          <div class="icon-box"><i class="bi bi-person-fill"></i></div>
+        </a>
+        <ul class="dropdown-menu dropdown-menu-end p-2">
+          <?php if(empty($_SESSION['user'])): ?>
+            <li><a class="dropdown-item" href="login.php">Đăng nhập</a></li>
+            <li><a class="dropdown-item" href="register.php">Tạo tài khoản</a></li>
+          <?php else: ?>
+            <li><a class="dropdown-item" href="account.php">Tài khoản</a></li>
+            <li><a class="dropdown-item" href="orders.php">Đơn hàng</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item text-danger" href="logout.php">Đăng xuất</a></li>
+          <?php endif; ?>
+        </ul>
+      </div>
+
+
+      <!-- WISHLIST -->
+<a href="wishlist.php"
+   class="text-decoration-none d-flex align-items-center position-relative"
+   title="Yêu thích">
+  <div class="icon-box">
+    <i class="bi bi-heart-fill text-danger"></i>
+  </div>
+
+  <?php if ($wishlist_count > 0): ?>
+    <span class="badge bg-danger rounded-pill"
+          style="position:relative;top:-10px;left:-8px">
+      <?= $wishlist_count ?>
+    </span>
+  <?php endif; ?>
+</a>
+
+      <!-- CART -->
+      <a href="cart.php" class="text-decoration-none d-flex align-items-center" id="cartLink">
+        <div class="icon-box"><i class="bi bi-bag-fill"></i></div>
+        <span id="cartBadge" class="badge bg-danger rounded-pill"><?= (int)$cart_count ?></span>
+      </a>
+
+      
+      <!-- MOBILE BUTTON -->
+      <button class="btn btn-light d-lg-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileMenu">
+        <i class="bi bi-list"></i>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ========== MOBILE MENU (GIỮ NGUYÊN) ========== -->
+<div class="offcanvas offcanvas-start" id="mobileMenu">
+  <div class="offcanvas-header">
+    <h5><?= esc(function_exists('site_name') ? site_name($conn) : 'AE Shop') ?></h5>
+    <button class="btn-close" data-bs-dismiss="offcanvas"></button>
+  </div>
+
+  <div class="offcanvas-body">
+
+    <form action="sanpham.php" method="get" class="mb-3 d-flex">
+      <input class="form-control me-2" name="q" placeholder="Tìm sản phẩm">
+      <button class="btn btn-dark">Tìm</button>
+    </form>
+
+    <ul class="list-unstyled">
+      <li class="mb-2"><a href="index.php">Trang chủ</a></li>
+      <li class="mb-2"><a href="sanpham.php">Sản phẩm</a></li>
+
+      <?php foreach($catsMenu as $c): ?>
+        <li class="mb-2 ps-3">
+          <a href="sanpham.php?slug=<?= urlencode($c['slug']) ?>">
+            <?= esc($c['ten']) ?>
+          </a>
+        </li>
+      <?php endforeach; ?>
+
+      <li class="mb-2"><a href="about.php">Giới thiệu</a></li>
+      <li class="mb-2"><a href="contact.php">Liên hệ</a></li>
+    </ul>
+  </div>
+</div>
