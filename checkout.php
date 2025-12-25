@@ -233,27 +233,195 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $provinces = [
   '' => 'Chọn tỉnh / thành',
-  'Hà Nội','Hồ Chí Minh','Đà Nẵng','Hải Phòng','Cần Thơ',
-  'An Giang','Bà Rịa - Vũng Tàu','Bạc Liêu','Bắc Giang','Bắc Kạn',
-  'Bắc Ninh','Bến Tre','Bình Định','Bình Dương','Bình Phước',
-  'Bình Thuận','Cà Mau','Cao Bằng','Đắk Lắk','Đắk Nông',
-  'Điện Biên','Đồng Nai','Đồng Tháp','Gia Lai','Hà Giang',
-  'Hà Nam','Hà Tĩnh','Hải Dương','Hậu Giang','Hòa Bình',
-  'Hưng Yên','Khánh Hòa','Kiên Giang','Kon Tum','Lai Châu',
-  'Lâm Đồng','Lạng Sơn','Lào Cai','Long An','Nam Định',
-  'Nghệ An','Ninh Bình','Ninh Thuận','Phú Thọ','Phú Yên',
-  'Quảng Bình','Quảng Nam','Quảng Ngãi','Quảng Ninh','Quảng Trị',
-  'Sóc Trăng','Sơn La','Tây Ninh','Thái Bình','Thái Nguyên',
-  'Thanh Hóa','Thừa Thiên Huế','Tiền Giang','Trà Vinh',
-  'Tuyên Quang','Vĩnh Long','Vĩnh Phúc','Yên Bái'
-];
 
+  // Miền Bắc
+  'HANOI'        => 'Hà Nội',
+  'HAGIANG'      => 'Hà Giang',
+  'CAOBANG'      => 'Cao Bằng',
+  'BACKAN'       => 'Bắc Kạn',
+  'TUYENQUANG'   => 'Tuyên Quang',
+  'LAOCAI'       => 'Lào Cai',
+  'DIENBIEN'     => 'Điện Biên',
+  'LAICHAU'      => 'Lai Châu',
+  'SONLA'        => 'Sơn La',
+  'YENBAI'       => 'Yên Bái',
+  'HOABINH'      => 'Hòa Bình',
+  'THAINGUYEN'   => 'Thái Nguyên',
+  'LANGSON'      => 'Lạng Sơn',
+  'QUANGNINH'    => 'Quảng Ninh',
+  'BACGIANG'     => 'Bắc Giang',
+  'PHUTHO'       => 'Phú Thọ',
+  'VINHPHUC'     => 'Vĩnh Phúc',
+  'BACNINH'      => 'Bắc Ninh',
+  'HAIDUONG'     => 'Hải Dương',
+  'HAIPHONG'     => 'Hải Phòng',
+  'HUNGYEN'      => 'Hưng Yên',
+  'THAIBINH'     => 'Thái Bình',
+  'HANAM'        => 'Hà Nam',
+  'NAMDINH'      => 'Nam Định',
+  'NINHBINH'     => 'Ninh Bình',
+
+  // Miền Trung
+  'THANHHOA'     => 'Thanh Hóa',
+  'NGHEAN'       => 'Nghệ An',
+  'HATINH'       => 'Hà Tĩnh',
+  'QUANGBINH'    => 'Quảng Bình',
+  'QUANGTRI'     => 'Quảng Trị',
+  'THUAHUE'      => 'Thừa Thiên Huế',
+  'DANANG'       => 'Đà Nẵng',
+  'QUANGNAM'     => 'Quảng Nam',
+  'QUANGNGAI'    => 'Quảng Ngãi',
+  'BINHDINH'     => 'Bình Định',
+  'PHUYEN'       => 'Phú Yên',
+  'KHANHHOA'     => 'Khánh Hòa',
+  'NINHTHUAN'    => 'Ninh Thuận',
+  'BINHTHUAN'    => 'Bình Thuận',
+
+  // Tây Nguyên
+  'KONTUM'       => 'Kon Tum',
+  'GIALAI'       => 'Gia Lai',
+  'DAKLAK'       => 'Đắk Lắk',
+  'DAKNONG'      => 'Đắk Nông',
+  'LAMDONG'      => 'Lâm Đồng',
+
+  // Miền Nam
+  'BPHUOC'       => 'Bình Phước',
+  'TAYNINH'      => 'Tây Ninh',
+  'BINHDUONG'    => 'Bình Dương',
+  'DONGNAI'      => 'Đồng Nai',
+  'BARIAVT'      => 'Bà Rịa - Vũng Tàu',
+  'HCM'          => 'TP Hồ Chí Minh',
+  'LONGAN'       => 'Long An',
+  'TIENGIANG'    => 'Tiền Giang',
+  'BENTRE'       => 'Bến Tre',
+  'TRAVINH'      => 'Trà Vinh',
+  'VINHLONG'     => 'Vĩnh Long',
+  'DONGTHAP'     => 'Đồng Tháp',
+  'ANGIANG'      => 'An Giang',
+  'KIENGIANG'    => 'Kiên Giang',
+  'CANTHO'       => 'Cần Thơ',
+  'HAUGIANG'     => 'Hậu Giang',
+  'SOCTRANG'     => 'Sóc Trăng',
+  'BACLIEU'      => 'Bạc Liêu',
+  'CAMAU'        => 'Cà Mau'
+];
 $wards = [
   '' => ['' => 'Chọn phường / xã'],
-  'Hanoi' => ['H1' => 'Phường A', 'H2' => 'Phường B'],
-  'HCM' => ['C1' => 'Phường 1', 'C2' => 'Phường 2'],
-  'DaNang' => ['D1' => 'Phường X', 'D2' => 'Phường Y']
+
+  /* ================= HÀ NỘI ================= */
+  'HANOI' => [
+
+    // Ba Đình
+    'PhucXa'      => 'Phúc Xá',
+    'TrucBach'    => 'Trúc Bạch',
+    'VinhPhuc'    => 'Vĩnh Phúc',
+    'CongVi'      => 'Cống Vị',
+    'LieuGiai'    => 'Liễu Giai',
+    'NgocHa'      => 'Ngọc Hà',
+    'DoiCan'      => 'Đội Cấn',
+    'GiangVo'     => 'Giảng Võ',
+    'KimMa'       => 'Kim Mã',
+    'NgocKhanh'   => 'Ngọc Khánh',
+
+    // Hoàn Kiếm
+    'ChuongDuong' => 'Chương Dương',
+    'CuaDong'     => 'Cửa Đông',
+    'HangBac'     => 'Hàng Bạc',
+    'HangBo'      => 'Hàng Bồ',
+    'HangBuom'    => 'Hàng Buồm',
+    'HangDao'     => 'Hàng Đào',
+    'HangGai'     => 'Hàng Gai',
+    'HangMa'      => 'Hàng Mã',
+    'HangTrong'   => 'Hàng Trống',
+    'LyThaiTo'    => 'Lý Thái Tổ',
+
+    // Đống Đa
+    'CatLinh'     => 'Cát Linh',
+    'VanMieu'     => 'Văn Miếu',
+    'QuocTuGiam'  => 'Quốc Tử Giám',
+    'LangThuong'  => 'Láng Thượng',
+    'OChoDua'     => 'Ô Chợ Dừa',
+    'TrungLiet'   => 'Trung Liệt',
+    'KhamThien'   => 'Khâm Thiên',
+    'ThoQuan'     => 'Thổ Quan',
+  ],
+
+  /* ================= TP HỒ CHÍ MINH ================= */
+  'HCM' => [
+
+    // Quận 1
+    'BenNghe'     => 'Bến Nghé',
+    'BenThanh'    => 'Bến Thành',
+    'CauKho'      => 'Cầu Kho',
+    'CauOngLanh'  => 'Cầu Ông Lãnh',
+    'CoGiang'     => 'Cô Giang',
+    'DaKao'       => 'Đa Kao',
+    'NguyenCuTrinh'=> 'Nguyễn Cư Trinh',
+    'NguyenThaiBinh'=> 'Nguyễn Thái Bình',
+
+    // Quận 3
+    'VoThiSau'    => 'Võ Thị Sáu',
+    'Phuong1Q3'   => 'Phường 1',
+    'Phuong2Q3'   => 'Phường 2',
+    'Phuong3Q3'   => 'Phường 3',
+    'Phuong4Q3'   => 'Phường 4',
+
+    // Bình Thạnh
+    'Phuong1BT'   => 'Phường 1',
+    'Phuong2BT'   => 'Phường 2',
+    'Phuong3BT'   => 'Phường 3',
+    'Phuong5BT'   => 'Phường 5',
+    'Phuong7BT'   => 'Phường 7',
+    'Phuong11BT'  => 'Phường 11',
+    'Phuong12BT'  => 'Phường 12',
+    'Phuong13BT'  => 'Phường 13',
+    'Phuong14BT'  => 'Phường 14',
+
+    // Thủ Đức
+    'LinhTrung'   => 'Linh Trung',
+    'LinhXuan'    => 'Linh Xuân',
+    'HiepBinhChanh'=> 'Hiệp Bình Chánh',
+    'HiepBinhPhuoc'=> 'Hiệp Bình Phước',
+    'TamPhu'      => 'Tam Phú',
+    'TamBinh'     => 'Tam Bình',
+  ],
+
+  /* ================= ĐÀ NẴNG ================= */
+  'DN' => [
+
+    // Hải Châu
+    'HaiChau1'    => 'Hải Châu I',
+    'HaiChau2'    => 'Hải Châu II',
+    'ThachThang'  => 'Thạch Thang',
+    'ThanhBinh'   => 'Thanh Bình',
+    'PhuocNinh'   => 'Phước Ninh',
+    'HoaThuanDong'=> 'Hòa Thuận Đông',
+    'HoaThuanTay' => 'Hòa Thuận Tây',
+
+    // Thanh Khê
+    'ChinhGian'   => 'Chính Gián',
+    'TamThuan'    => 'Tam Thuận',
+    'XuanHa'      => 'Xuân Hà',
+    'ThanhKheTay' => 'Thanh Khê Tây',
+    'ThanhKheDong'=> 'Thanh Khê Đông',
+
+    // Ngũ Hành Sơn
+    'MyAn'        => 'Mỹ An',
+    'KhueMy'      => 'Khuê Mỹ',
+    'HoaHai'      => 'Hòa Hải',
+    'HoaQuy'      => 'Hòa Quý',
+    //* ===== TP HÀ GIANG ===== */
+  'NguyenTrai'      => 'Nguyễn Trãi',
+  'TranPhu'         => 'Trần Phú',
+  'MinhKhai'        => 'Minh Khai',
+  'QuangTrung'      => 'Quang Trung',
+  'NgocHa'          => 'Ngọc Hà',
+  'NgocDuong'       => 'Ngọc Đường',
+  'PhuongDo'        => 'Phương Độ',
+  'PhuongThien'     => 'Phương Thiện',
+  ]
 ];
+
 ?>
 
 <?php require_once __DIR__ . '/inc/header.php'; ?>
@@ -390,24 +558,15 @@ $wards = [
             </div>
 
             <div class="col-md-6 mb-3">
-              <label class="form-label">Phường / Xã</label>
+              <label class="form-label">Xã / Phường</label>
               <select id="ward" name="address_ward" class="form-select" required>
-                <option value="">Chọn phường / xã</option>
+                <option value="">Chọn xã / phường</option>
               </select>
-              <div class="invalid-feedback">Chọn phường / xã.</div>
+              <div class="invalid-feedback">Chọn xã / phường.</div>
             </div>
           </div>
 
           <hr>
-
-          <div class="mb-3">
-            <div class="h-title">Phương thức vận chuyển</div>
-            <div class="border rounded p-3 text-center text-muted">
-              <i class="bi bi-truck" style="font-size:28px;"></i>
-              <div class="mt-2">Hệ thống sẽ hiển thị phương thức vận chuyển khi bạn chọn Tỉnh / Thành.</div>
-            </div>
-          </div>
-
           <hr>
 
           <div class="mb-3">
