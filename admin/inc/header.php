@@ -14,21 +14,30 @@ if (!function_exists('site_name')) {
     function site_name($conn = null){ return 'AE SHOP'; }
 }
 
-/* ===== CHECK ADMIN =====
-   Yêu cầu login set:
-   $_SESSION['user']
-   $_SESSION['is_admin'] = 1
-*/
+/* ===== CHECK ADMIN ===== */
 if (empty($_SESSION['user']) || empty($_SESSION['is_admin'])) {
     header('Location: ../login.php');
     exit;
 }
 
 $user = $_SESSION['user'];
+$currentPage = basename($_SERVER['PHP_SELF']);
 
 /* ===== CSRF ADMIN ===== */
 if (empty($_SESSION['csrf_admin'])) {
     $_SESSION['csrf_admin'] = bin2hex(random_bytes(16));
+}
+
+/* ===== QUICK STATS ===== */
+try {
+    $countUsers = (int)$conn->query("SELECT COUNT(*) FROM nguoi_dung")->fetchColumn();
+    $countOrdersNew = (int)$conn->query("
+        SELECT COUNT(*) FROM don_hang 
+        WHERE trang_thai IN ('moi','da_xac_nhan')
+    ")->fetchColumn();
+} catch (Throwable $e) {
+    $countUsers = 0;
+    $countOrdersNew = 0;
 }
 ?>
 <!doctype html>
@@ -78,6 +87,8 @@ body{
   border-radius:10px;
   padding:10px 14px;
   margin-bottom:4px;
+  display:flex;
+  align-items:center;
 }
 .nav-link i{
   margin-right:8px;
@@ -86,6 +97,9 @@ body{
 .nav-link:hover{
   background:#f1f6ff;
   color:#0b7bdc;
+}
+.nav-link .badge{
+  margin-left:auto;
 }
 .main{
   padding:24px;
@@ -109,7 +123,9 @@ body{
   </div>
 
   <div class="d-flex align-items-center gap-3">
-    <span class="small-muted">Xin chào, <?= esc($user['ten'] ?? 'Admin') ?></span>
+    <span class="small-muted">
+      <?= esc($user['ten'] ?? 'Admin') ?> · <span class="text-success">Administrator</span>
+    </span>
     <a href="../index.php" class="btn btn-sm btn-outline-secondary">Xem site</a>
     <a href="../logout.php" class="btn btn-sm btn-outline-danger">Đăng xuất</a>
   </div>
@@ -122,28 +138,39 @@ body{
     <aside class="col-md-2 sidebar">
       <nav class="nav flex-column">
 
-        <a class="nav-link <?= basename($_SERVER['PHP_SELF'])==='index.php'?'active':'' ?>" href="index.php">
+        <a class="nav-link <?= $currentPage==='index.php'?'active':'' ?>" href="index.php">
           <i class="bi bi-speedometer2"></i> Dashboard
         </a>
 
-        <a class="nav-link <?= basename($_SERVER['PHP_SELF'])==='users.php'?'active':'' ?>" href="users.php">
+        <a class="nav-link <?= $currentPage==='users.php'?'active':'' ?>" href="users.php">
           <i class="bi bi-people"></i> Người dùng
+          <?php if($countUsers): ?>
+            <span class="badge bg-secondary"><?= $countUsers ?></span>
+          <?php endif; ?>
         </a>
 
-        <a class="nav-link <?= in_array(basename($_SERVER['PHP_SELF']),['sanpham.php','products.php'])?'active':'' ?>" href="sanpham.php">
+        <a class="nav-link <?= $currentPage==='products.php'?'active':'' ?>" href="products.php">
           <i class="bi bi-box-seam"></i> Sản phẩm
         </a>
 
-        <a class="nav-link <?= basename($_SERVER['PHP_SELF'])==='inventory_log.php'?'active':'' ?>" href="inventory_log.php">
+        <a class="nav-link <?= $currentPage==='inventory_log.php'?'active':'' ?>" href="inventory_log.php">
           <i class="bi bi-clock-history"></i> Lịch sử tồn kho
         </a>
 
-        <a class="nav-link <?= in_array(basename($_SERVER['PHP_SELF']),['donhang.php','orders.php'])?'active':'' ?>" href="donhang.php">
+        <a class="nav-link <?= $currentPage==='orders.php'?'active':'' ?>" href="orders.php">
           <i class="bi bi-receipt"></i> Đơn hàng
+          <?php if($countOrdersNew): ?>
+            <span class="badge bg-danger"><?= $countOrdersNew ?></span>
+          <?php endif; ?>
         </a>
 
-        <a class="nav-link <?= basename($_SERVER['PHP_SELF'])==='coupons.php'?'active':'' ?>" href="coupons.php">
+        <a class="nav-link <?= $currentPage==='coupons.php'?'active':'' ?>" href="coupons.php">
           <i class="bi bi-percent"></i> Mã giảm giá
+        </a>
+
+        <!-- ✅ BÁO CÁO DOANH THU (ĐÃ SỬA ĐÚNG) -->
+        <a class="nav-link <?= $currentPage==='reports.php'?'active':'' ?>" href="reports.php">
+          <i class="bi bi-bar-chart-line"></i> Báo cáo doanh thu
         </a>
 
         <hr>
